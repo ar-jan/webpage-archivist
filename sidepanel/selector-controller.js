@@ -11,6 +11,10 @@ export function createSelectorController({
   logger = console
 }) {
   const panelState = panelStore.state;
+  let editRevision = 0;
+  let savePromise = null;
+
+  updateSaveButton();
 
   function addSelectorRule() {
     const draftRules = readSelectorRulesFromForm(selectorRulesListEl, () => panelStore.nextRuleId());
@@ -21,32 +25,55 @@ export function createSelectorController({
   }
 
   async function saveSelectorRules() {
+    if (savePromise) {
+      return savePromise;
+    }
+
     const draftRules = readSelectorRulesFromForm(selectorRulesListEl, () => panelStore.nextRuleId());
     const validationError = validateSelectorRules(draftRules);
     if (validationError) {
       setStatus(validationError);
-      return;
+      return false;
     }
 
-    saveRulesButton.disabled = true;
-    try {
-      const response = await setSelectorRulesActionImpl(draftRules);
+    const revisionToSave = editRevision;
+    savePromise = Promise.resolve().then(async () => {
+      try {
+        const response = await setSelectorRulesActionImpl(draftRules);
 
-      if (!response || response.ok !== true) {
-        setStatus(messageFromError(response?.error) ?? "Failed to save selector rules.");
-        return;
+        if (!response || response.ok !== true) {
+          setStatus(messageFromError(response?.error) ?? "Failed to save selector rules.");
+          return false;
+        }
+
+        if (editRevision !== revisionToSave) {
+          setStatus("Earlier edits saved. Save the newer changes before collecting links.");
+          return false;
+        }
+
+        const persistedRules = normalizeSelectorRules(response.selectorRules);
+        renderSelectorRules(selectorRulesListEl, persistedRules);
+        setSelectorRulesDirty(false);
+        setStatus(`Saved ${persistedRules.length} selector rule(s).`);
+        return true;
+      } catch (error) {
+        logger.error("[webpage-archivist] Failed to save selector rules.", error);
+        setStatus("Failed to save selector rules.");
+        return false;
       }
+    }).finally(() => {
+      savePromise = null;
+      updateSaveButton();
+    });
+    updateSaveButton();
+    return savePromise;
+  }
 
-      const persistedRules = normalizeSelectorRules(response.selectorRules);
-      renderSelectorRules(selectorRulesListEl, persistedRules);
-      setSelectorRulesDirty(false);
-      setStatus(`Saved ${persistedRules.length} selector rule(s).`);
-    } catch (error) {
-      logger.error("[webpage-archivist] Failed to save selector rules.", error);
-      setStatus("Failed to save selector rules.");
-    } finally {
-      saveRulesButton.disabled = false;
+  async function ensureSelectorRulesSaved() {
+    if (savePromise) {
+      return savePromise;
     }
+    return !panelState.selectorRulesDirty || saveSelectorRules();
   }
 
   function handleSelectorRuleListClick(event) {
@@ -77,15 +104,21 @@ export function createSelectorController({
   }
 
   function markSelectorRulesDirty() {
-    if (!panelState.selectorRulesDirty) {
-      panelStore.setSelectorRulesDirty(true);
-    }
-    updateRulesSummary(getDraftSelectorRuleCount());
+    setSelectorRulesDirty(true);
   }
 
   function setSelectorRulesDirty(isDirty) {
+    if (isDirty) {
+      editRevision += 1;
+    }
     panelStore.setSelectorRulesDirty(isDirty);
     updateRulesSummary(getDraftSelectorRuleCount());
+    updateSaveButton();
+  }
+
+  function updateSaveButton() {
+    saveRulesButton.disabled = Boolean(savePromise) || !panelState.selectorRulesDirty;
+    saveRulesButton.textContent = savePromise ? "Saving…" : "Save rules";
   }
 
   function updateRulesSummary(ruleCount) {
@@ -100,6 +133,7 @@ export function createSelectorController({
   return {
     addSelectorRule,
     saveSelectorRules,
+    ensureSelectorRulesSaved,
     handleSelectorRuleListClick,
     markSelectorRulesDirty,
     setSelectorRulesDirty,

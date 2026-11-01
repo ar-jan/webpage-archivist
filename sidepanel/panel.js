@@ -296,11 +296,6 @@ async function loadPanelState() {
 }
 
 async function collectLinks() {
-  if (panelState.selectorRulesDirty) {
-    setStatus("Save selector rules before collecting links.");
-    return;
-  }
-
   collectButton.disabled = true;
 
   try {
@@ -319,6 +314,12 @@ async function collectLinks() {
     const permissionResult = await ensureHostPermissionAction(activeTab.url);
     if (!permissionResult.granted) {
       setStatus("Permission was not granted for this site.");
+      return;
+    }
+
+    // Request host access before saving so the permission request retains the
+    // Collect click's user gesture. Never collect with an unsaved draft.
+    if (!await selectorController.ensureSelectorRulesSaved()) {
       return;
     }
 

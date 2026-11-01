@@ -28,7 +28,11 @@ is not required.
 ## Archive pages
 
 Collect links from an HTTP(S) page, grant access when prompted, select links and
-add them to the queue. **Start** requests access to queued sites and processes one
+add them to the queue. After editing selector rules, use **Save rules** or click
+**Collect Links** to save them automatically before collection. Invalid rules or
+a failed save keep the draft editable and stop collection.
+
+**Start** requests access to queued sites and processes one
 page at a time. Logged-in page content is captured in your browser.
 
 **Pause** stops starting new items while the current save settles. **Stop** cancels
@@ -57,6 +61,7 @@ to captured pages or zotero.org.
 ```sh
 npm test                    # builds dependencies and runs module tests
 npm run test:watch
+node tests/integration/selector-rules.mjs  # isolated Chromium selector/collection test
 ```
 
 The opt-in real-browser test uses a **disposable** Zotero profile with its own data
