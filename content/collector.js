@@ -1,10 +1,8 @@
 (() => {
-  if (globalThis.__zoteroArchivistCollectorInstalled) {
+  if (globalThis.__archivistLinkCollector) {
     return;
   }
-  globalThis.__zoteroArchivistCollectorInstalled = true;
 
-  const RUN_COLLECTOR = "RUN_COLLECTOR";
   const DEFAULT_MAX_LINKS = 500;
   const MIN_MAX_LINKS = 1;
   const MAX_MAX_LINKS = 5000;
@@ -19,34 +17,27 @@
   const MIN_AUTO_SCROLL_SETTLE_DELAY_MS = 100;
   const MAX_AUTO_SCROLL_SETTLE_DELAY_MS = 10000;
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (!message || message.type !== RUN_COLLECTOR) {
-      return false;
+  let activeRun = null;
+  // Called only through scripting.executeScript in this extension's isolated
+  // world. No persistent message listener or worker response channel is needed.
+  globalThis.__archivistLinkCollector = {
+    async run(id, payload) {
+      if (activeRun) activeRun.cancelled = true;
+      const run = { id, cancelled: false };
+      activeRun = run;
+      try {
+        const rules = Array.isArray(payload?.rules) ? payload.rules : [];
+        return await collectLinks(rules, normalizeCollectorRunSettings(payload), run);
+      } finally {
+        if (activeRun === run) activeRun = null;
+      }
+    },
+    cancel(id) {
+      if (activeRun?.id === id) activeRun.cancelled = true;
     }
+  };
 
-    void handleCollectorMessage(message.payload)
-      .then((links) => {
-        sendResponse({ ok: true, links });
-      })
-      .catch((error) => {
-        sendResponse({
-          ok: false,
-          error: {
-            message: error instanceof Error ? error.message : String(error)
-          }
-        });
-      });
-
-    return true;
-  });
-
-  async function handleCollectorMessage(payload) {
-    const rules = Array.isArray(payload?.rules) ? payload.rules : [];
-    const settings = normalizeCollectorRunSettings(payload);
-    return collectLinks(rules, settings);
-  }
-
-  async function collectLinks(rules, settings) {
+  async function collectLinks(rules, settings, run) {
     const enabledRules = Array.isArray(rules)
       ? rules.filter((rule) => rule && rule.enabled !== false && typeof rule.cssSelector === "string")
       : [];
@@ -63,7 +54,7 @@
       collected.length < maxLinks
     ) {
       try {
-        await autoScrollAndCollect(enabledRules, settings, dedupe, collected);
+        await autoScrollAndCollect(enabledRules, settings, dedupe, collected, run);
       } catch (_error) {
       }
     }
@@ -131,7 +122,7 @@
     return addedCount;
   }
 
-  async function autoScrollAndCollect(enabledRules, settings, dedupe, collected) {
+  async function autoScrollAndCollect(enabledRules, settings, dedupe, collected, run) {
     const scrollContainer = getScrollContainer();
     if (!scrollContainer) {
       return;
@@ -142,7 +133,7 @@
 
     try {
       for (let round = 0; round < settings.autoScrollMaxRounds; round += 1) {
-        if (collected.length >= settings.maxLinks) {
+        if (run.cancelled || collected.length >= settings.maxLinks) {
           return;
         }
 
@@ -151,6 +142,7 @@
 
         scrollToPosition(scrollContainer, previousHeight);
         await wait(settings.autoScrollSettleDelayMs);
+        if (run.cancelled) return;
 
         const currentHeight = getScrollHeight(scrollContainer);
         const addedCount = collectLinksFromDom(enabledRules, settings.maxLinks, dedupe, collected);
@@ -168,7 +160,7 @@
         }
       }
     } finally {
-      scrollToPosition(scrollContainer, initialScrollTop);
+      if (activeRun === run) scrollToPosition(scrollContainer, initialScrollTop);
     }
   }
 

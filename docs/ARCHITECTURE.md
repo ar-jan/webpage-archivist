@@ -27,6 +27,7 @@ Connector removed the private iframe transport Archivist previously depended on.
 | Capture | `content/snapshot.js`, `background/snapshot-capture.js` | SingleFile adapter, document binding, bounded chunk transfer |
 | Save records | `background/save-job-repo.js` | IndexedDB job metadata, temporary snapshot bytes and completion receipts |
 | Panel | `sidepanel/`, particularly `zotero-controller.js` | Link selection, queue controls, Connect Zotero, explicit destination and recovery feedback |
+| Link collection | `shared/link-collection.js`, `content/collector.js` | Direct panel-to-page script execution, document binding, bounded waits and local persistence |
 | Build | `scripts/build.mjs` | Pin and bundle SingleFile/SparkMD5; include source and license notices |
 
 Run `npm ci && npm run build` before loading the repository unpacked. Generated
@@ -41,6 +42,24 @@ The panel bounds each save attempt to five seconds, retaining the dirty draft on
 failure and ignoring late acknowledgements. Collect waits for a successful save
 before using edited rules. The selector integration test covers native side-panel
 saves with the worker stopped, hung storage, retry, and late responses.
+
+Link collection also runs directly from the trusted panel. It uses the tab
+captured at the Collect click, checks host access, injects the collector on demand
+into the top frame's isolated world, and calls it with `scripting.executeScript`.
+The call targets the injected document ID and returns its links as a script
+result. It requires neither a runtime/content-message listener nor a Zotero
+diagnostic refresh. The worker's `COLLECT_LINKS` command delegates to the same
+helper, but the panel does not use that message channel.
+
+Browser/storage operations have five-second deadlines. The page read allows the
+configured maximum scrolling duration plus five seconds (27.5 seconds with the
+default settings; static pages normally finish after three 750 ms idle rounds).
+Failure returns a specific error and releases the Collect button. A timed-out
+run is cancelled on a best-effort basis; its late result cannot initiate a storage
+write. Collection errors or detected navigation preserve the previous links.
+As with rule saves, an already-issued storage write cannot be cancelled by timing
+out its acknowledgement. Native-panel integration tests exercise collection with
+the worker stopped, a non-responsive runtime channel, and a stalled page result.
 
 ## Connection and destination
 

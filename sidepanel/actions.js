@@ -7,13 +7,14 @@ import {
   sanitizeSelectorRules,
   toOriginPattern
 } from "../shared/protocol.js";
+import { collectLinksFromTab } from "../shared/link-collection.js";
 
 export async function getPanelStateAction() {
   return sendRuntimeMessage(MESSAGE_TYPES.GET_PANEL_STATE);
 }
 
-export async function collectLinksAction() {
-  return sendRuntimeMessage(MESSAGE_TYPES.COLLECT_LINKS);
+export async function collectLinksAction(tab) {
+  return collectLinksFromTab(tab);
 }
 
 export async function setCollectedLinksAction(links) {

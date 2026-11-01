@@ -92,11 +92,11 @@ try {
   await custom.locator(".rule-heading-toggle").click();
   await custom.locator(".rule-selector-input").fill("");
   await panel.evaluate(() => {
-    const send = chrome.runtime.sendMessage.bind(chrome.runtime);
+    const execute = chrome.scripting.executeScript.bind(chrome.scripting);
     globalThis.collectionRequests = 0;
-    chrome.runtime.sendMessage = (...args) => {
-      if (args[0].type === "COLLECT_LINKS") globalThis.collectionRequests++;
-      return send(...args);
+    chrome.scripting.executeScript = (...args) => {
+      globalThis.collectionRequests++;
+      return execute(...args);
     };
   });
   await collectFromFixture();
@@ -134,7 +134,7 @@ try {
   const native = await openNativeSidePanel(context, panel);
   await native.evaluate(`(async () => {
     const deadline = Date.now() + 5000;
-    while (document.querySelector("#status").textContent !== "Ready.") {
+    while (document.querySelector("#status")?.textContent !== "Ready.") {
       if (Date.now() > deadline) throw new Error("Native panel did not initialize");
       await new Promise(resolve => setTimeout(resolve, 50));
     }
@@ -156,9 +156,43 @@ try {
   })()`);
   assert.equal(nativeResult.status, "Saved 4 selector rule(s).");
   assert.equal(nativeResult.rules, 4);
+  // Collection also works in the actual SIDE_PANEL with a dead worker channel.
+  await fixture.bringToFront();
+  const nativeCollection = await native.evaluate(`(async () => {
+    document.querySelector("#collect-links-button").click();
+    const deadline = Date.now() + 6000;
+    while (document.querySelector("#collect-links-button").disabled) {
+      if (Date.now() > deadline) throw new Error("Native collection did not complete");
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return { status: document.querySelector("#status").textContent,
+      links: (await chrome.storage.local.get("collectedLinks")).collectedLinks };
+  })()`);
+  assert.equal(nativeCollection.status, "Collected 2 link(s).");
+  assert.deepEqual(nativeCollection.links.map(link => link.url), [
+    "https://selector-fixture.test/chosen", "https://selector-fixture.test/ignored"
+  ]);
+  // A stalled page result releases the button and leaves the previous links.
+  const stalledCollection = await native.evaluate(`(async () => {
+    const execute = chrome.scripting.executeScript.bind(chrome.scripting);
+    chrome.scripting.executeScript = request => request.args?.length === 3
+      ? new Promise(resolve => { globalThis.finishLateCollection = resolve; }) : execute(request);
+    document.querySelector("#collect-links-button").click();
+    const deadline = Date.now() + 7000;
+    while (document.querySelector("#collect-links-button").disabled) {
+      if (Date.now() > deadline) throw new Error("Collection button stayed disabled");
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    chrome.scripting.executeScript = execute;
+    globalThis.finishLateCollection([]);
+    return { status: document.querySelector("#status").textContent,
+      links: (await chrome.storage.local.get("collectedLinks")).collectedLinks };
+  })()`);
+  assert.match(stalledCollection.status, /Reading page links timed out/);
+  assert.deepEqual(stalledCollection.links, nativeCollection.links);
   assert.deepEqual(errors, []);
   await panel.screenshot({ path: path.join(root, "selector-rules.png"), fullPage: true });
-  console.log(JSON.stringify({ root, savedRules: 3, collectedLinks: 1, validationAndSaveFailuresBlockedCollection: true, hungSaveRecovered: true, nativePanelSavedWithoutWorker: true }));
+  console.log(JSON.stringify({ root, savedRules: 3, collectedLinks: 1, validationAndSaveFailuresBlockedCollection: true, hungSaveRecovered: true, nativePanelSavedWithoutWorker: true, nativePanelCollectedWithoutWorker: true, hungCollectionRecovered: true }));
 } finally {
   await context.close();
 }

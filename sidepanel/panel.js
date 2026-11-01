@@ -324,7 +324,7 @@ async function collectLinks() {
     }
 
     setStatus("Collecting links...");
-    const response = await collectLinksAction();
+    const response = await collectLinksAction(activeTab);
 
     if (!response || response.ok !== true) {
       const errorCode = response?.error?.code;
@@ -336,9 +336,6 @@ async function collectLinks() {
       return;
     }
 
-    if (response.providerDiagnostics) {
-      setProviderDiagnosticsState(response.providerDiagnostics);
-    }
     setCollectedLinksState(response.links);
     setStatus(`Collected ${panelState.collectedLinks.length} link(s).`);
   } catch (error) {

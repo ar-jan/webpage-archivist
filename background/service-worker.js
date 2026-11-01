@@ -3,14 +3,13 @@ import {
   MESSAGE_TYPES,
   createError,
   createSuccess,
-  isHttpUrl,
-  sanitizeSelectorRules,
-  toOriginPattern
+  sanitizeSelectorRules
 } from "../shared/protocol.js";
 import {
   createQueueItemId,
   normalizeCollectedLinks
 } from "../shared/state.js";
+import { collectLinksFromTab } from "../shared/link-collection.js";
 import { routeMessage, isPanelSender } from "./message-router.js";
 import { createProviderOrchestrator } from "./provider-orchestrator.js";
 import { createQueueEngine, QUEUE_ENGINE_ALARM_NAME } from "./queue-engine.js";
@@ -22,7 +21,6 @@ import {
   ensureQueueSettings,
   ensureQueueRuntime,
   ensureSelectorRules,
-  getCollectorSettings,
   getCollectedLinks,
   getQueueItems,
   getQueueSettings,
@@ -182,78 +180,7 @@ async function getPanelState() {
 }
 
 async function collectLinksFromActiveTab() {
-  const activeTab = await getActiveTab();
-  if (!activeTab || !Number.isInteger(activeTab.id)) {
-    return createError(ERROR_CODES.NO_ACTIVE_TAB, "No active tab found.");
-  }
-
-  if (!isHttpUrl(activeTab.url)) {
-    return createError(
-      ERROR_CODES.UNSUPPORTED_URL,
-      "Collect Links only works on http(s) pages.",
-      { tabUrl: activeTab.url ?? null }
-    );
-  }
-
-  const originPattern = toOriginPattern(activeTab.url);
-  if (!originPattern) {
-    return createError(ERROR_CODES.UNSUPPORTED_URL, "Unable to derive host permission pattern.");
-  }
-
-  const hasPermission = await chrome.permissions.contains({ origins: [originPattern] });
-  if (!hasPermission) {
-    return createError(ERROR_CODES.MISSING_HOST_PERMISSION, "Host permission required.", {
-      originPattern
-    });
-  }
-
-  const selectorRules = await getSelectorRules();
-  const collectorSettings = await getCollectorSettings();
-
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId: activeTab.id },
-      files: ["content/collector.js"]
-    });
-  } catch (error) {
-    return createError(ERROR_CODES.COLLECTOR_ERROR, "Failed to inject collector script.", {
-      reason: String(error)
-    });
-  }
-
-  let collectorResponse;
-  try {
-    collectorResponse = await chrome.tabs.sendMessage(activeTab.id, {
-      type: MESSAGE_TYPES.RUN_COLLECTOR,
-      payload: {
-        rules: selectorRules,
-        maxLinks: collectorSettings.maxLinksPerRun,
-        autoScrollEnabled: collectorSettings.autoScrollEnabled,
-        autoScrollMaxRounds: collectorSettings.autoScrollMaxRounds,
-        autoScrollIdleRounds: collectorSettings.autoScrollIdleRounds,
-        autoScrollSettleDelayMs: collectorSettings.autoScrollSettleDelayMs
-      }
-    });
-  } catch (error) {
-    return createError(ERROR_CODES.COLLECTOR_ERROR, "Collector did not respond.", {
-      reason: String(error)
-    });
-  }
-
-  if (!collectorResponse || collectorResponse.ok !== true) {
-    return createError(ERROR_CODES.COLLECTOR_ERROR, "Collector returned an error.", {
-      collectorError: collectorResponse?.error ?? null
-    });
-  }
-
-  const links = await saveCollectedLinks(collectorResponse.links);
-  const providerDiagnostics = await providerOrchestrator.refreshProviderDiagnostics();
-
-  return createSuccess({
-    links,
-    collectedCount: links.length,
-    providerDiagnostics
-  });
+  return collectLinksFromTab(await getActiveTab());
 }
 
 async function setCollectedLinks(rawLinks) {

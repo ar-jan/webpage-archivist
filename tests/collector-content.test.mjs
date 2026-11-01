@@ -11,7 +11,7 @@ const collectorScriptSource = fs.readFileSync(
 test("collector auto-scrolls and captures links loaded later", async () => {
   const harness = createCollectorHarness({ growthRounds: 2 });
 
-  const { response, returned } = await runCollector(harness.listener, {
+  const links = await harness.collector.run("test-run", {
     rules: [
       {
         id: "anchors",
@@ -27,10 +27,8 @@ test("collector auto-scrolls and captures links loaded later", async () => {
     autoScrollSettleDelayMs: 1
   });
 
-  assert.equal(returned, true);
-  assert.equal(response.ok, true);
   assert.deepEqual(
-    Array.from(response.links, (link) => link.url),
+    Array.from(links, (link) => link.url),
     [
       "https://example.com/post-1",
       "https://example.com/post-2",
@@ -44,7 +42,7 @@ test("collector auto-scrolls and captures links loaded later", async () => {
 test("collector can skip auto-scroll when disabled", async () => {
   const harness = createCollectorHarness({ growthRounds: 2 });
 
-  const { response, returned } = await runCollector(harness.listener, {
+  const links = await harness.collector.run("test-run", {
     rules: [
       {
         id: "anchors",
@@ -57,16 +55,26 @@ test("collector can skip auto-scroll when disabled", async () => {
     autoScrollEnabled: false
   });
 
-  assert.equal(returned, true);
-  assert.equal(response.ok, true);
-  assert.equal(response.links.length, 1);
-  assert.equal(response.links[0].url, "https://example.com/post-1");
+  assert.equal(links.length, 1);
+  assert.equal(links[0].url, "https://example.com/post-1");
   assert.equal(harness.state.scrollCalls.length, 0);
   assert.equal(harness.scrollingElement.scrollTop, harness.initialScrollTop);
 });
 
+test("cancelling collection stops scrolling and restores the original position", async () => {
+  const harness = createCollectorHarness();
+  const pending = harness.collector.run("cancel-me", {
+    rules: [{ id: "anchors", cssSelector: "a[href]" }],
+    autoScrollMaxRounds: 200,
+    autoScrollSettleDelayMs: 100
+  });
+  harness.collector.cancel("cancel-me");
+  await pending;
+  assert.equal(harness.state.scrollCalls.length, 2);
+  assert.equal(harness.scrollingElement.scrollTop, harness.initialScrollTop);
+});
+
 function createCollectorHarness({ growthRounds = 0, initialScrollTop = 120 } = {}) {
-  const listeners = [];
   const state = {
     round: 0,
     scrollCalls: []
@@ -154,18 +162,7 @@ function createCollectorHarness({ growthRounds = 0, initialScrollTop = 120 } = {
     }
   });
 
-  const chrome = {
-    runtime: {
-      onMessage: {
-        addListener(listener) {
-          listeners.push(listener);
-        }
-      }
-    }
-  };
-
   const context = vm.createContext({
-    chrome,
     document,
     window,
     URL,
@@ -187,7 +184,7 @@ function createCollectorHarness({ growthRounds = 0, initialScrollTop = 120 } = {
   });
 
   return {
-    listener: listeners[0],
+    collector: context.__archivistLinkCollector,
     state,
     scrollingElement,
     initialScrollTop
@@ -208,33 +205,4 @@ function createLinkElement({ href, title }) {
       return null;
     }
   };
-}
-
-async function runCollector(listener, payload) {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("Collector response timed out."));
-    }, 2500);
-
-    let returnedValue = false;
-    try {
-      returnedValue = listener(
-        {
-          type: "RUN_COLLECTOR",
-          payload
-        },
-        null,
-        (response) => {
-          clearTimeout(timeout);
-          resolve({
-            returned: returnedValue,
-            response
-          });
-        }
-      );
-    } catch (error) {
-      clearTimeout(timeout);
-      reject(error);
-    }
-  });
 }

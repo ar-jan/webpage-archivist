@@ -35,6 +35,10 @@ directly to extension storage without a service-worker round trip. If storage
 does not respond within five seconds, Save becomes available again and the draft
 is retained for retry.
 
+Link collection runs directly from the panel and does not need Zotero to respond.
+It scrolls by default to find links loaded later. If reading the page stalls,
+Collect becomes available again with a timeout message; the previous links remain.
+
 **Start** requests access to queued sites and processes one
 page at a time. Logged-in page content is captured in your browser.
 
