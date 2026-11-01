@@ -18,9 +18,9 @@ Connector removed the private iframe transport Archivist previously depended on.
 
 | Surface | Files | Responsibility |
 | --- | --- | --- |
-| Service worker | `background/service-worker.js`, `message-router.js` | Browser events, panel-only command authorization, collection and queue dispatch |
+| Service worker | `background/service-worker.js`, `message-router.js` | Browser events, panel-only queue command authorization and dispatch |
 | Queue | `background/queue-engine.js`, `queue-lifecycle.js` | One active item/tab, pacing, cancellation, restart handling and outcome application |
-| Queue state | `background/storage-repo.js`, `shared/state.js`, `shared/protocol.js` | Normalized queue/settings/diagnostics in `chrome.storage.local` |
+| Queue state | `shared/storage-repo.js`, `shared/state.js`, `shared/protocol.js` | Normalized queue/settings/diagnostics in `chrome.storage.local` |
 | Local client | `zotero/local-client.js` | Fixed-origin requests, API identity, deadlines, authorization, library/collection enumeration |
 | Connection settings | `zotero/local-settings.js` | Server-bound authorization and explicit destination |
 | Provider | `zotero/provider-local.js`, `background/provider-orchestrator.js` | Keyed item creation/reconciliation, three-phase upload, health diagnostics |
@@ -30,22 +30,32 @@ Connector removed the private iframe transport Archivist previously depended on.
 | Link collection | `shared/link-collection.js`, `content/collector.js` | Direct panel-to-page script execution, document binding, bounded waits and local persistence |
 | Build | `scripts/build.mjs` | Pin and bundle SingleFile/SparkMD5; include source and license notices |
 
-Run `npm ci && npm run build` before loading the repository unpacked. Generated
-`content/snapshot.bundle.js` and the SingleFile files under `vendor/` are ignored
-by Git. The small `vendor/md5.js` module and its license are checked in because
-the worker imports it at startup. No worker startup import may require an ignored
-build artifact: a missing imported file prevents registration before any error
-handler runs. `npm run build` also reproduces that checked-in checksum module.
-`npm test` rebuilds dependencies before the Node tests. Runtime modules otherwise remain native ES modules.
-There are no remotely loaded scripts. See [dependency notices](../THIRD_PARTY_NOTICES.md)
-for the AGPL SingleFile dependency; Archivist's original source retains its MIT license.
+Run `npm ci && npm run build`, then load **`dist/`** unpacked. The source
+checkout is not a runnable extension. The build bundles the worker and its pinned
+SparkMD5 dependency together, produces both SingleFile capture scripts, and copies
+the panel modules, content collector, manifest and icons. It publishes the output
+only after all steps succeed. Generated files are ignored by Git. No executable
+dependency is downloaded at runtime. The complete directory includes the upstream
+source/license notices and Archivist source/build recipe in `source/`.
 
-The worker-startup browser regression copies only files included in the checkout,
-then verifies registration, panel commands and extension reload. It deliberately
-omits generated capture files, which are only loaded when archiving a page and
-report build instructions if absent. Earlier tests copied generated files and
-therefore missed the missing-MD5 registration failure (Brave status code 3 plus
-“An unknown error occurred when fetching the script”).
+`npm test` builds the package and includes a clean-source rebuild test: shipped
+source plus the lockfile dependencies must reproduce the runtime files without
+any repository-generated assets. Browser tests load the complete package and
+exercise worker registration/reload, native side-panel operations, and delayed
+initialization. See [dependency notices](../THIRD_PARTY_NOTICES.md) for SingleFile's
+AGPL dependency; Archivist's original source retains its MIT license.
+
+The panel owns local settings, selectors, collected links and selection. It reads
+one normalized snapshot directly through `shared/storage-repo.js`, then refreshes
+Zotero diagnostics independently. Edit revisions and intervening storage events
+prevent a delayed initial snapshot from replacing newer local state. Diagnostics
+share `zotero/diagnostics.js` between panel and worker; they never gate hydration.
+The worker owns durable queue operations. One shared local-initialization promise
+orders startup cleanup before recovery, commands and browser events. Startup does
+not fetch Zotero diagnostics. Its command handlers are serialized so
+new commands cannot race queue cleanup. Worker replies have a 45-second UI deadline;
+timeouts report an uncertain command outcome and never retry mutations automatically.
+The old local-state/selector/collection message routes have been removed.
 
 Selector-rule edits are validated and saved directly from the trusted panel to
 `chrome.storage.local`. They do not depend on a worker message acknowledgement.
@@ -59,8 +69,8 @@ captured at the Collect click, checks host access, injects the collector on dema
 into the top frame's isolated world, and calls it with `scripting.executeScript`.
 The call targets the injected document ID and returns its links as a script
 result. It requires neither a runtime/content-message listener nor a Zotero
-diagnostic refresh. The worker's `COLLECT_LINKS` command delegates to the same
-helper, but the panel does not use that message channel.
+diagnostic refresh. Collection belongs to the open panel: closing it before the
+result is persisted can discard that result. Durable queue saves remain worker-owned.
 
 Browser/storage operations have five-second deadlines. The page read allows the
 configured maximum scrolling duration plus five seconds (27.5 seconds with the
@@ -89,7 +99,7 @@ The minimum Chromium version is now 120.
    the save takes multiple write requests. Authorization is not requested automatically
    by queue jobs, and a 401 clears the saved key and asks the user to reconnect.
 4. The local key and server ID are stored in `chrome.storage.local`, restricted to
-   `TRUSTED_CONTEXTS`. They are not returned in panel-state messages, capture data,
+   `TRUSTED_CONTEXTS`. They are not returned in panel-state snapshots, capture data,
    URLs or logs. Content scripts cannot access this storage.
 5. The panel enumerates `/users/0/groups` and library collections. The destination
    defaults to **My Library** upon first connection and can be changed explicitly.
@@ -255,3 +265,14 @@ Zotero file registration need broader integration coverage. An offscreen upload
 context is not currently used; large or slow local requests fail at the explicit
 deadline and can be reconciled on retry. No compatibility fallback to the Connector
 or the cloud API is provided.
+
+## Cancellation and cleanup
+
+Stop requests cancellation immediately and updates the queue. The engine retains
+and awaits the actual provider operation, including outstanding IndexedDB writes;
+it does not race that promise against an abort promise and pretend the save ended.
+The abort signal reaches capture, API requests and the health check. `waitForIdle()`
+therefore waits for settlement before job cleanup, and the engine does not start
+another save while a cancelled provider is still writing. A delayed write cannot
+recreate a job after Clear has deleted it. Durable keys and receipts still reconcile
+remote writes that Zotero may have accepted before cancellation.

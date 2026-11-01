@@ -37,11 +37,11 @@ test("message router delegates to matching handler", async () => {
 test("message router rejects payload on payloadless messages", async () => {
   const response = await routeMessage(
     {
-      type: MESSAGE_TYPES.GET_PANEL_STATE,
+      type: MESSAGE_TYPES.STOP_QUEUE,
       payload: {}
     },
     {
-      [MESSAGE_TYPES.GET_PANEL_STATE]: async () => ({ ok: true })
+      [MESSAGE_TYPES.STOP_QUEUE]: async () => ({ ok: true })
     }
   );
 
@@ -184,11 +184,11 @@ test("message router rejects invalid optional queue runtime context payload", as
 test("message router validates array payload contracts", async () => {
   const invalidResponse = await routeMessage(
     {
-      type: MESSAGE_TYPES.SET_COLLECTED_LINKS,
+      type: MESSAGE_TYPES.AUTHOR_QUEUE_FROM_SELECTION,
       payload: {}
     },
     {
-      [MESSAGE_TYPES.SET_COLLECTED_LINKS]: async () => ({ ok: true })
+      [MESSAGE_TYPES.AUTHOR_QUEUE_FROM_SELECTION]: async () => ({ ok: true })
     }
   );
 
@@ -198,11 +198,11 @@ test("message router validates array payload contracts", async () => {
 
   const validResponse = await routeMessage(
     {
-      type: MESSAGE_TYPES.SET_COLLECTED_LINKS,
+      type: MESSAGE_TYPES.AUTHOR_QUEUE_FROM_SELECTION,
       payload: { links: [] }
     },
     {
-      [MESSAGE_TYPES.SET_COLLECTED_LINKS]: async () => ({ ok: true })
+      [MESSAGE_TYPES.AUTHOR_QUEUE_FROM_SELECTION]: async () => ({ ok: true })
     }
   );
 
@@ -212,25 +212,25 @@ test("message router validates array payload contracts", async () => {
 test("message router validates object payload contracts", async () => {
   const invalidResponse = await routeMessage(
     {
-      type: MESSAGE_TYPES.SET_QUEUE_SETTINGS,
+      type: MESSAGE_TYPES.REMOVE_QUEUE_ITEM,
       payload: {}
     },
     {
-      [MESSAGE_TYPES.SET_QUEUE_SETTINGS]: async () => ({ ok: true })
+      [MESSAGE_TYPES.REMOVE_QUEUE_ITEM]: async () => ({ ok: true })
     }
   );
 
   assert.equal(invalidResponse.ok, false);
   assert.equal(invalidResponse.error.code, "BAD_REQUEST");
-  assert.match(invalidResponse.error.message, /payload\.queueSettings/i);
+  assert.match(invalidResponse.error.message, /payload\.queueItem/i);
 
   const validResponse = await routeMessage(
     {
-      type: MESSAGE_TYPES.SET_QUEUE_SETTINGS,
-      payload: { queueSettings: { interItemDelayMs: 5000, interItemDelayJitterMs: 2000 } }
+      type: MESSAGE_TYPES.REMOVE_QUEUE_ITEM,
+      payload: { queueItem: { interItemDelayMs: 5000, interItemDelayJitterMs: 2000 } }
     },
     {
-      [MESSAGE_TYPES.SET_QUEUE_SETTINGS]: async () => ({ ok: true })
+      [MESSAGE_TYPES.REMOVE_QUEUE_ITEM]: async () => ({ ok: true })
     }
   );
 

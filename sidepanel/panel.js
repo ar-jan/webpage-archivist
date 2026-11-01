@@ -18,6 +18,7 @@ import {
   getActiveTabAction,
   getCurrentWindowIdAction,
   getPanelStateAction,
+  refreshDiagnosticsAction,
   queueLifecycleAction,
   setCollectedLinksAction,
   setQueueSettingsAction,
@@ -75,7 +76,6 @@ const stopQueueButton = document.getElementById("stop-queue-button");
 const retryFailedQueueButton = document.getElementById("retry-failed-queue-button");
 const queueDelaySecondsInput = document.getElementById("queue-delay-seconds-input");
 const queueJitterSecondsInput = document.getElementById("queue-jitter-seconds-input");
-const queueZoteroSaveModeSelect = document.getElementById("queue-zotero-save-mode-select");
 const saveQueueSettingsButton = document.getElementById("save-queue-settings-button");
 const rulesSummaryEl = document.getElementById("rules-summary");
 const integrationModeEl = document.getElementById("integration-mode");
@@ -93,9 +93,8 @@ const zoteroController = createZoteroController({
   connectButton: document.getElementById("connect-zotero-button"),
   destinationSelect: document.getElementById("zotero-destination-select"),
   setStatus,
-  refresh: async () => { const response = await getPanelStateAction(); if (response.ok) setProviderDiagnosticsState(response.providerDiagnostics); }
+  refresh: async () => setProviderDiagnosticsState(await refreshDiagnosticsAction())
 });
-void zoteroController.loadDestinations().catch(() => {});
 
 const QUEUE_SETTINGS_MILLISECONDS_PER_SECOND = 1000;
 const DEFAULT_QUEUE_RESIZED_HEIGHT_PX = 300;
@@ -107,6 +106,8 @@ const RESULTS_MIN_SECTION_FALLBACK_PX = 96;
 const panelStore = createPanelStore(normalizeFilterQueryValue(resultsFilterInput.value));
 const panelState = panelStore.state;
 let queueSettingsSaveInProgress = false;
+let panelHydrating = true;
+const initialStorageChanges = new Set();
 let queueResizedHeightPx = DEFAULT_QUEUE_RESIZED_HEIGHT_PX;
 let activeResizePointerId = null;
 let resizeStartY = 0;
@@ -276,23 +277,32 @@ void loadPanelState();
 
 async function loadPanelState() {
   setStatus("Loading panel state...");
-
-  const response = await getPanelStateAction();
-
-  if (!response || response.ok !== true) {
-    setStatus(messageFromError(response?.error) ?? "Failed to load extension state.");
-    return;
+  const revision = selectorController.getEditRevision();
+  try {
+    const response = await getPanelStateAction();
+    if (!response?.ok) throw new Error(messageFromError(response?.error) || "Failed to load local settings.");
+    if (selectorController.getEditRevision() === revision && !initialStorageChanges.has(STORAGE_KEYS.SELECTOR_RULES)) {
+      selectorController.renderSelectorRules(selectorController.normalizeSelectorRules(response.selectorRules));
+      selectorController.setSelectorRulesDirty(false);
+    }
+    for (const [key, apply] of [
+      [STORAGE_KEYS.COLLECTED_LINKS, setCollectedLinksState],
+      [STORAGE_KEYS.QUEUE_SETTINGS, setQueueSettingsState],
+      [STORAGE_KEYS.QUEUE_ITEMS, setQueueItemsState],
+      [STORAGE_KEYS.QUEUE_RUNTIME, setQueueRuntimeState],
+      [STORAGE_KEYS.PROVIDER_DIAGNOSTICS, setProviderDiagnosticsState]
+    ]) {
+      if (!initialStorageChanges.has(key)) apply(response[key]);
+    }
+    if (statusEl.textContent === "Loading panel state...") setStatus("Ready.");
+  } catch (error) {
+    setStatus(error.message || "Failed to load local settings. Reopen the panel to retry.");
+  } finally {
+    panelHydrating = false;
   }
-
-  const selectorRules = selectorController.normalizeSelectorRules(response.selectorRules);
-  selectorController.renderSelectorRules(selectorRules);
-  setCollectedLinksState(response.collectedLinks);
-  setQueueSettingsState(response.queueSettings);
-  setQueueItemsState(response.queueItems);
-  setQueueRuntimeState(response.queueRuntime);
-  setProviderDiagnosticsState(response.providerDiagnostics);
-  selectorController.setSelectorRulesDirty(false);
-  setStatus("Ready.");
+  // Network availability must not gate local state or replace an editor draft.
+  void refreshDiagnosticsAction().then(setProviderDiagnosticsState).catch(() => {});
+  void zoteroController.loadDestinations().catch(() => {});
 }
 
 async function collectLinks() {
@@ -377,6 +387,15 @@ function handleStorageChange(changes, areaName) {
   if (areaName !== "local") {
     return;
   }
+
+  if (panelHydrating) Object.keys(changes).forEach(key => initialStorageChanges.add(key));
+  const rulesChange = changes[STORAGE_KEYS.SELECTOR_RULES];
+  if (rulesChange && !panelState.selectorRulesDirty && !selectorController.isSaving()) {
+    selectorController.renderSelectorRules(selectorController.normalizeSelectorRules(rulesChange.newValue));
+    selectorController.setSelectorRulesDirty(false);
+  }
+  const linksChange = changes[STORAGE_KEYS.COLLECTED_LINKS];
+  if (linksChange) setCollectedLinksState(linksChange.newValue);
 
   const queueItemsChange = changes[STORAGE_KEYS.QUEUE_ITEMS];
   if (queueItemsChange) {
@@ -642,7 +661,6 @@ function renderQueueSettingsForm(queueSettings) {
   const normalizedQueueSettings = normalizeQueueSettings(queueSettings);
   queueDelaySecondsInput.value = formatSecondsInput(normalizedQueueSettings.interItemDelayMs);
   queueJitterSecondsInput.value = formatSecondsInput(normalizedQueueSettings.interItemDelayJitterMs);
-  queueZoteroSaveModeSelect.value = normalizedQueueSettings.zoteroSaveMode;
 }
 
 function updateQueueSettingsActionState() {
@@ -671,7 +689,7 @@ async function saveQueueSettings() {
     const savedQueueSettings = normalizeQueueSettings(response.queueSettings);
     setQueueSettingsState(savedQueueSettings);
     setStatus(
-      `Queue delay set to ${formatSecondsLabel(savedQueueSettings.interItemDelayMs)} +/- ${formatSecondsLabel(savedQueueSettings.interItemDelayJitterMs)} (${formatQueueSaveModeLabel()}).`
+      `Queue delay set to ${formatSecondsLabel(savedQueueSettings.interItemDelayMs)} +/- ${formatSecondsLabel(savedQueueSettings.interItemDelayJitterMs)}.`
     );
   } catch (error) {
     console.error("[webpage-archivist] Failed to save queue settings.", error);
@@ -697,8 +715,7 @@ function readQueueSettingsFromInputs() {
 
   return normalizeQueueSettings({
     interItemDelayMs: Math.round(delaySeconds * QUEUE_SETTINGS_MILLISECONDS_PER_SECOND),
-    interItemDelayJitterMs: Math.round(jitterSeconds * QUEUE_SETTINGS_MILLISECONDS_PER_SECOND),
-    zoteroSaveMode: queueZoteroSaveModeSelect.value
+    interItemDelayJitterMs: Math.round(jitterSeconds * QUEUE_SETTINGS_MILLISECONDS_PER_SECOND)
   });
 }
 
@@ -712,10 +729,6 @@ function formatSecondsInput(milliseconds) {
 
 function formatSecondsLabel(milliseconds) {
   return `${formatSecondsInput(milliseconds)}s`;
-}
-
-function formatQueueSaveModeLabel() {
-  return "Web Page with Snapshot";
 }
 
 function messageFromError(error) {
@@ -746,13 +759,7 @@ async function refreshIntegrationDiagnostics() {
   renderIntegrationState();
 
   try {
-    const response = await getPanelStateAction();
-    if (!response || response.ok !== true) {
-      setStatus(messageFromError(response?.error) ?? "Failed to refresh integration diagnostics.");
-      return;
-    }
-
-    setProviderDiagnosticsState(response.providerDiagnostics);
+    setProviderDiagnosticsState(await refreshDiagnosticsAction());
     setStatus("Integration diagnostics refreshed.");
   } catch (error) {
     console.error("[webpage-archivist] Failed to refresh integration diagnostics.", error);

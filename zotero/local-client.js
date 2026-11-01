@@ -87,7 +87,7 @@ export function createLocalClient({ fetchImpl = globalThis.fetch, timeoutMs = 20
   }
   return {
     request,
-    health: () => request("/api/"),
+    health: (options) => request("/api/", options),
     authorize: (serverID) => request("/api/local/authorize", {
       method: "POST", serverID, json: { appName: "Webpage Archivist" }, deadlineMs: 120000
     }),

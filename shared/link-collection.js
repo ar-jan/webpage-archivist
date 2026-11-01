@@ -1,14 +1,12 @@
 import {
-  DEFAULT_SELECTOR_RULES,
   ERROR_CODES,
-  STORAGE_KEYS,
   createError,
   createSuccess,
   isHttpUrl,
-  sanitizeSelectorRules,
   toOriginPattern
 } from "./protocol.js";
-import { normalizeCollectedLinks, normalizeCollectorSettings } from "./state.js";
+import { readCollectionSettings, saveCollectedLinks } from "./storage-repo.js";
+import { withTimeout } from "./async.js";
 
 // Local collection must not depend on the worker or on Zotero's availability.
 // Each browser operation is bounded; scrolling gets its configured time budget.
@@ -37,11 +35,7 @@ export async function collectLinksFromTab(tab, {
       return createError(ERROR_CODES.MISSING_HOST_PERMISSION, "Host permission required.");
     }
 
-    const stored = await step(chromeImpl.storage.local.get([
-      STORAGE_KEYS.SELECTOR_RULES, STORAGE_KEYS.COLLECTOR_SETTINGS
-    ]), "Reading collection settings");
-    const rules = sanitizeSelectorRules(stored[STORAGE_KEYS.SELECTOR_RULES] ?? DEFAULT_SELECTOR_RULES);
-    const settings = normalizeCollectorSettings(stored[STORAGE_KEYS.COLLECTOR_SETTINGS]);
+    const { rules, settings } = await step(readCollectionSettings(chromeImpl), "Reading collection settings");
     const injected = await step(chromeImpl.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
       files: ["content/collector.js"]
@@ -68,8 +62,7 @@ export async function collectLinksFromTab(tab, {
     if (result.url !== tab.url || currentTab.url !== tab.url) {
       throw new Error("The page changed during collection. Try Collect Links again.");
     }
-    const links = normalizeCollectedLinks(result.links);
-    await step(chromeImpl.storage.local.set({ [STORAGE_KEYS.COLLECTED_LINKS]: links }), "Saving collected links");
+    const links = await step(saveCollectedLinks(result.links, chromeImpl), "Saving collected links");
     return createSuccess({ links, collectedCount: links.length });
   } catch (error) {
     // Cancellation is best effort, scoped to this run and document. A late
@@ -85,19 +78,5 @@ export async function collectLinksFromTab(tab, {
       }
     }
     return createError(ERROR_CODES.COLLECTOR_ERROR, error?.message || "Collect Links failed.");
-  }
-}
-
-async function withTimeout(promise, timeoutMs, message) {
-  let timer;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-      })
-    ]);
-  } finally {
-    clearTimeout(timer);
   }
 }

@@ -1,6 +1,6 @@
 node_modules/
-vendor/*
-!vendor/md5.js
-!vendor/SparkMD5-LICENSE
+dist/
+.dist-build-*/
+vendor/
 content/snapshot.bundle.js
 content/snapshot.bundle.js.LEGAL.txt

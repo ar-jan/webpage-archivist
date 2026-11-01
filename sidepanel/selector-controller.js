@@ -1,4 +1,5 @@
 import { sanitizeSelectorRules } from "../shared/protocol.js";
+import { withTimeout } from "../shared/async.js";
 
 export function createSelectorController({
   panelStore,
@@ -39,19 +40,9 @@ export function createSelectorController({
 
     const revisionToSave = editRevision;
     savePromise = Promise.resolve().then(async () => {
-      let timer;
       try {
-        const response = await Promise.race([
-          setSelectorRulesActionImpl(draftRules),
-          new Promise((resolve) => {
-            timer = setTimeout(() => resolve({
-              ok: false,
-              error: {
-                message: "Saving selector rules timed out. Your edits are still here; try Save rules again."
-              }
-            }), saveTimeoutMs);
-          })
-        ]);
+        const response = await withTimeout(setSelectorRulesActionImpl(draftRules), saveTimeoutMs,
+          "Saving selector rules timed out. Your edits are still here; try Save rules again.");
 
         if (!response || response.ok !== true) {
           setStatus(messageFromError(response?.error) ?? "Failed to save selector rules.");
@@ -70,10 +61,8 @@ export function createSelectorController({
         return true;
       } catch (error) {
         logger.error("[webpage-archivist] Failed to save selector rules.", error);
-        setStatus("Failed to save selector rules.");
+        setStatus(error.message?.startsWith("Saving selector rules timed out.") ? error.message : "Failed to save selector rules.");
         return false;
-      } finally {
-        clearTimeout(timer);
       }
     }).finally(() => {
       savePromise = null;
@@ -145,6 +134,8 @@ export function createSelectorController({
   }
 
   return {
+    getEditRevision: () => editRevision,
+    isSaving: () => Boolean(savePromise),
     addSelectorRule,
     saveSelectorRules,
     ensureSelectorRulesSaved,

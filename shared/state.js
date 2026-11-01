@@ -20,11 +20,7 @@ export const DEFAULT_COLLECTOR_SETTINGS = Object.freeze({
 });
 export const DEFAULT_QUEUE_SETTINGS = Object.freeze({
   interItemDelayMs: 5000,
-  interItemDelayJitterMs: 2000,
-  zoteroSaveMode: "webpage_with_snapshot"
-});
-export const QUEUE_ZOTERO_SAVE_MODES = Object.freeze({
-  WEBPAGE_WITH_SNAPSHOT: "webpage_with_snapshot"
+  interItemDelayJitterMs: 2000
 });
 
 const QUEUE_ITEM_STATUS_SET = new Set(QUEUE_ITEM_STATUSES);
@@ -141,11 +137,9 @@ export function normalizeQueueSettings(input) {
 
   const interItemDelayMs = normalizeQueueInterItemDelayMs(input.interItemDelayMs);
   const interItemDelayJitterMs = normalizeQueueInterItemJitterMs(input.interItemDelayJitterMs);
-  const zoteroSaveMode = normalizeQueueZoteroSaveMode(input.zoteroSaveMode);
   return {
     interItemDelayMs,
-    interItemDelayJitterMs,
-    zoteroSaveMode
+    interItemDelayJitterMs
   };
 }
 
@@ -427,12 +421,4 @@ function normalizeQueueInterItemJitterMs(value) {
     return QUEUE_INTER_ITEM_JITTER_MAX_MS;
   }
   return truncated;
-}
-
-function normalizeQueueZoteroSaveMode(value) {
-  if (typeof value === "string" && value === QUEUE_ZOTERO_SAVE_MODES.WEBPAGE_WITH_SNAPSHOT) {
-    return value;
-  }
-
-  return DEFAULT_QUEUE_SETTINGS.zoteroSaveMode;
 }

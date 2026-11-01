@@ -103,9 +103,6 @@ export function createQueueEngine({
       };
       queueItems[activeIndex] = itemForSave;
       await saveQueueItems(queueItems);
-      const queueSettings = await getQueueSettingsSafely();
-      const normalizedQueueSettings = normalizeQueueSettings(queueSettings);
-
       if (generation !== runGeneration) return;
       const controller = new AbortController();
       const deadlineAt = Date.now() + 4 * 60 * 1000;
@@ -113,11 +110,10 @@ export function createQueueEngine({
       activeSave = { controller, deadlineAt };
       let saveResult;
       try {
-        saveResult = await withCancellation(saveQueueItemWithProvider({
+        saveResult = await saveQueueItemWithProvider({
           queueItem: itemForSave, tabId: activeTabId,
-          zoteroSaveMode: normalizedQueueSettings.zoteroSaveMode,
           signal: controller.signal
-        }), controller.signal);
+        });
       } catch (error) { saveResult = { ok: false, error: error.message || "Snapshot save failed." }; }
       finally { clearTimeout(timer); activeSave = null; }
 
@@ -541,13 +537,4 @@ function normalizeRandomValue(value) {
   }
 
   return value;
-}
-
-function withCancellation(promise, signal) {
-  return new Promise((resolve, reject) => {
-    const abort = () => reject(signal.reason || new Error("Save cancelled."));
-    signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) abort();
-    Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
-  });
 }

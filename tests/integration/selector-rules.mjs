@@ -2,17 +2,14 @@ import { openNativeSidePanel } from "../test-helpers/native-sidepanel.mjs";
 // UI regression test with an isolated Chromium profile and a synthetic HTTP(S)
 // page. No Zotero instance or credentials are needed.
 import { chromium } from "playwright-core";
-import { mkdtemp, cp, readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, cp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
 
 const root = await mkdtemp(path.join(tmpdir(), "archivist-selector-test-"));
 const extension = path.join(root, "extension");
-await mkdir(extension);
-for (const entry of ["background", "content", "shared", "sidepanel", "zotero", "vendor", "icons", "manifest.json"]) {
-  await cp(entry, path.join(extension, entry), { recursive: true });
-}
+await cp("dist", extension, { recursive: true });
 const manifestPath = path.join(extension, "manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 manifest.host_permissions = ["https://selector-fixture.test/*"];

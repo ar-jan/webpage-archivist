@@ -1,7 +1,5 @@
-// Deliberately exclude ignored build outputs: module tests and earlier browser
-// tests built/copied them first, hiding broken startup in a fresh checkout.
+// Verify the complete built artifact, including explicit browser reload.
 import { chromium } from "playwright-core";
-import { execFileSync } from "node:child_process";
 import { access, cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,16 +7,9 @@ import assert from "node:assert/strict";
 
 const root = await mkdtemp(path.join(tmpdir(), "archivist-worker-test-"));
 const extension = path.join(root, "extension");
-const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { encoding: "utf8" })
-  .split("\0").filter(file => /^(background|content|shared|sidepanel|zotero|vendor|icons)\//.test(file) || file === "manifest.json");
-for (const file of new Set(files)) {
-  const target = path.join(extension, file);
-  await mkdir(path.dirname(target), { recursive: true });
-  await cp(file, target);
-}
-await access(path.join(extension, "vendor/md5.js"));
-for (const file of ["vendor/single-file-hooks.js", "content/snapshot.bundle.js"]) {
-  await assert.rejects(access(path.join(extension, file)), { code: "ENOENT" });
+await cp("dist", extension, { recursive: true });
+for (const file of ["background/service-worker.js", "vendor/single-file-hooks.js", "content/snapshot.bundle.js"]) {
+  await access(path.join(extension, file));
 }
 const manifestPath = path.join(extension, "manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
@@ -53,7 +44,7 @@ try {
     }, id, { timeout: 10000 });
     await panel.goto(panelUrl);
     await panel.locator("#status").filter({ hasText: "Ready." }).waitFor({ timeout: 10000 });
-    const response = await panel.evaluate(() => chrome.runtime.sendMessage({ type: "GET_PANEL_STATE" }));
+    const response = await panel.evaluate(() => chrome.runtime.sendMessage({ type: "STOP_QUEUE" }));
     assert.equal(response.ok, true);
     const info = await extensions.evaluate(async id =>
       (await chrome.developerPrivate.getExtensionsInfo({ includeDisabled: true })).find(item => item.id === id), id);
@@ -62,25 +53,10 @@ try {
     assert.ok(info.views.some(view => view.type === "EXTENSION_SERVICE_WORKER_BACKGROUND" && view.renderProcessId !== -1));
   }
 
-  // Actual Chrome injection errors for absent capture bundles must be actionable.
-  await context.route("https://startup-fixture.test/**", route => route.fulfill({
-    contentType: "text/html", body: "<!doctype html><title>Startup fixture</title><p>Capture me</p>"
-  }));
-  const fixture = await context.newPage();
-  await fixture.goto("https://startup-fixture.test/");
-  const failure = await panel.evaluate(async () => {
-    const [tab] = await chrome.tabs.query({ url: "https://startup-fixture.test/*" });
-    const { captureSnapshot } = await import(chrome.runtime.getURL("background/snapshot-capture.js"));
-    try {
-      await captureSnapshot({ tabId: tab.id, captureId: "missing-build-test" });
-      return null;
-    } catch (error) {
-      return error.message;
-    }
-  });
-  assert.match(failure, /Snapshot build file is missing \(vendor\/single-file-hooks.js\)/);
-  assert.match(failure, /npm ci and npm run build/);
-  console.log(JSON.stringify({ root, sourceOnlyStartup: true, reload: true, workerCommands: true, missingCaptureBuildExplained: true }));
+  const retired = await panel.evaluate(() => chrome.runtime.sendMessage({ type: "COLLECT_LINKS" }));
+  assert.equal(retired.error.code, "BAD_REQUEST");
+  console.log(JSON.stringify({ root, completeBuildStartup: true, reload: true, workerCommands: true, retiredRouteRejected: true }));
+
 } finally {
   await context.close();
 }

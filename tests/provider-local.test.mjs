@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { IDBFactory } from "fake-indexeddb";
-import SparkMD5 from "../vendor/md5.js";
+import SparkMD5 from "spark-md5";
 import { createLocalClient } from "../zotero/local-client.js";
 import { createLocalProvider } from "../zotero/provider-local.js";
 import { createSaveJobRepo } from "../background/save-job-repo.js";

@@ -1,4 +1,4 @@
-import SparkMD5 from "../vendor/md5.js";
+import SparkMD5 from "spark-md5";
 import { createLocalClient, LocalAPIError, LOCAL_ORIGIN, validateDestination } from "./local-client.js";
 import { getLocalSettings } from "./local-settings.js";
 import { createSaveJobRepo } from "../background/save-job-repo.js";
@@ -12,7 +12,7 @@ export function createLocalProvider({ client = createLocalClient(), jobs = creat
     try {
       check();
       const { auth, destination } = await getSettings();
-      const health = await client.health();
+      const health = await client.health({ signal });
       if (job && job.serverID !== health.serverID) throw conflict("This save belongs to a different Zotero database.");
       if (!auth?.key || !auth.remember || auth.serverID !== health.serverID) {
         throw new Error("Connect to Zotero and choose Always Allow before saving.");

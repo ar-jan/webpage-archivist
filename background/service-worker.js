@@ -2,14 +2,12 @@ import {
   ERROR_CODES,
   MESSAGE_TYPES,
   createError,
-  createSuccess,
-  sanitizeSelectorRules
+  createSuccess
 } from "../shared/protocol.js";
 import {
   createQueueItemId,
   normalizeCollectedLinks
 } from "../shared/state.js";
-import { collectLinksFromTab } from "../shared/link-collection.js";
 import { routeMessage, isPanelSender } from "./message-router.js";
 import { createProviderOrchestrator } from "./provider-orchestrator.js";
 import { createQueueEngine, QUEUE_ENGINE_ALARM_NAME } from "./queue-engine.js";
@@ -21,18 +19,13 @@ import {
   ensureQueueSettings,
   ensureQueueRuntime,
   ensureSelectorRules,
-  getCollectedLinks,
   getQueueItems,
   getQueueSettings,
   getQueueRuntime,
-  getSelectorRules,
-  saveCollectedLinks,
   saveProviderDiagnostics,
   saveQueueItems,
-  saveQueueSettings,
-  saveQueueRuntime,
-  saveSelectorRules
-} from "./storage-repo.js";
+  saveQueueRuntime
+} from "../shared/storage-repo.js";
 
 const providerOrchestrator = createProviderOrchestrator({
   saveProviderDiagnostics
@@ -56,13 +49,8 @@ const queueLifecycleHandlers = createQueueLifecycleHandlers({
 });
 
 const messageHandlers = {
-  [MESSAGE_TYPES.GET_PANEL_STATE]: async () => createSuccess(await getPanelState()),
-  [MESSAGE_TYPES.COLLECT_LINKS]: async () => collectLinksFromActiveTab(),
-  [MESSAGE_TYPES.SET_COLLECTED_LINKS]: async (message) => setCollectedLinks(message.payload?.links),
   [MESSAGE_TYPES.AUTHOR_QUEUE_FROM_SELECTION]: async (message) =>
     authorQueueFromSelection(message.payload?.links),
-  [MESSAGE_TYPES.SET_QUEUE_SETTINGS]: async (message) =>
-    setQueueSettings(message.payload?.queueSettings),
   [MESSAGE_TYPES.CLEAR_QUEUE]: async () => queueLifecycleHandlers.clearQueue(),
   [MESSAGE_TYPES.CLEAR_ARCHIVED_QUEUE]: async () => queueLifecycleHandlers.clearArchivedQueue(),
   [MESSAGE_TYPES.REMOVE_QUEUE_ITEM]: async (message) =>
@@ -74,16 +62,26 @@ const messageHandlers = {
     queueLifecycleHandlers.resumeQueue(message.payload?.queueRuntimeContext),
   [MESSAGE_TYPES.STOP_QUEUE]: async () => queueLifecycleHandlers.stopQueue(),
   [MESSAGE_TYPES.RETRY_FAILED_QUEUE]: async () => queueLifecycleHandlers.retryFailedQueue(),
-  [MESSAGE_TYPES.REVERSE_QUEUE]: async () => queueLifecycleHandlers.reverseQueue(),
-  [MESSAGE_TYPES.SET_SELECTOR_RULES]: async (message) => setSelectorRules(message.payload?.rules)
+  [MESSAGE_TYPES.REVERSE_QUEUE]: async () => queueLifecycleHandlers.reverseQueue()
 };
 
+// Serialize queue mutations and cleanup; a new Start must not race a Clear.
+let commandRun = Promise.resolve();
+function enqueueCommand(message) {
+  const result = commandRun.then(async () => {
+    await initializeExtensionState();
+    return handleMessage(message);
+  });
+  commandRun = result.catch(() => {});
+  return result;
+}
+
 chrome.runtime.onInstalled.addListener(() => {
-  void initializeExtensionState();
+  void initializeExtensionState().catch(reportStartupError);
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  void initializeExtensionState();
+  void initializeExtensionState().catch(reportStartupError);
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -91,7 +89,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse(createError(ERROR_CODES.BAD_REQUEST, "Only the Archivist panel can issue commands."));
     return false;
   }
-  handleMessage(message)
+  enqueueCommand(message)
     .then((result) => sendResponse(result))
     .catch((error) => {
       console.error("[webpage-archivist] Unhandled runtime error", error);
@@ -106,18 +104,31 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     return;
   }
 
-  void queueEngine.handleQueueAlarm();
+  void initializeExtensionState().then(() => queueEngine.handleQueueAlarm()).catch(reportStartupError);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  void queueEngine.handleQueueTabUpdated(tabId, changeInfo);
+  void initializeExtensionState().then(() => queueEngine.handleQueueTabUpdated(tabId, changeInfo)).catch(reportStartupError);
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  void queueEngine.handleQueueTabRemoved(tabId);
+  void initializeExtensionState().then(() => queueEngine.handleQueueTabRemoved(tabId)).catch(reportStartupError);
 });
 
-async function initializeExtensionState() {
+let initialization;
+function initializeExtensionState() {
+  initialization ??= initializeLocalState().catch(error => {
+    initialization = null;
+    throw error;
+  });
+  return initialization;
+}
+
+function reportStartupError(error) {
+  console.error("[webpage-archivist] Background initialization failed.", error);
+}
+
+async function initializeLocalState() {
   await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
   await Promise.all([
     ensureCollectorSettings(),
@@ -129,8 +140,6 @@ async function initializeExtensionState() {
   ]);
   await providerOrchestrator.jobs.cleanup((await getQueueItems()).map(item => item.id));
   await configureSidePanelBehavior();
-  await providerOrchestrator.refreshProviderDiagnostics();
-  await queueEngine.recoverQueueEngineState();
 }
 
 async function handleMessage(message) {
@@ -159,37 +168,6 @@ async function configureSidePanelBehavior() {
   } catch (error) {
     console.error("[webpage-archivist] Failed to configure side panel behavior.", error);
   }
-}
-
-async function getPanelState() {
-  const selectorRules = await getSelectorRules();
-  const collectedLinks = await getCollectedLinks();
-  const queueSettings = await getQueueSettings();
-  const queueItems = await getQueueItems();
-  const queueRuntime = await getQueueRuntime();
-  const providerDiagnostics = await providerOrchestrator.refreshProviderDiagnostics();
-
-  return {
-    selectorRules,
-    collectedLinks,
-    queueSettings,
-    queueItems,
-    queueRuntime,
-    providerDiagnostics
-  };
-}
-
-async function collectLinksFromActiveTab() {
-  return collectLinksFromTab(await getActiveTab());
-}
-
-async function setCollectedLinks(rawLinks) {
-  const links = await saveCollectedLinks(rawLinks);
-  return createSuccess({
-    links,
-    collectedCount: links.length,
-    selectedCount: links.filter((link) => link.selected !== false).length
-  });
 }
 
 async function authorQueueFromSelection(rawLinks) {
@@ -235,48 +213,4 @@ async function authorQueueFromSelection(rawLinks) {
   });
 }
 
-async function setSelectorRules(rawRules) {
-  if (!Array.isArray(rawRules) || rawRules.length === 0) {
-    return createError(
-      ERROR_CODES.INVALID_SELECTOR_RULES,
-      "At least one selector rule is required."
-    );
-  }
-
-  const sanitizedRules = sanitizeSelectorRules(rawRules);
-  if (sanitizedRules.length !== rawRules.length || sanitizedRules.length === 0) {
-    return createError(
-      ERROR_CODES.INVALID_SELECTOR_RULES,
-      "One or more selector rules are invalid.",
-      {
-        submittedCount: rawRules.length,
-        validCount: sanitizedRules.length
-      }
-    );
-  }
-
-  await saveSelectorRules(sanitizedRules);
-
-  return createSuccess({
-    selectorRules: sanitizedRules
-  });
-}
-
-async function setQueueSettings(rawQueueSettings) {
-  const queueSettings = await saveQueueSettings(rawQueueSettings);
-  return createSuccess({
-    queueSettings
-  });
-}
-
-async function getActiveTab() {
-  const tabs = await chrome.tabs.query({
-    active: true,
-    lastFocusedWindow: true
-  });
-
-  return tabs[0] ?? null;
-}
-
-void chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
-void queueEngine.recoverQueueEngineState();
+void initializeExtensionState().then(() => queueEngine.recoverQueueEngineState()).catch(reportStartupError);

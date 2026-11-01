@@ -1,7 +1,7 @@
 // Opt-in integration test. Requires a disposable Zotero profile with local API
 // enabled on port 23129 and its test-only localAPIKeys.json. Never use a real profile.
 import { chromium } from "playwright-core";
-import { mkdtemp, cp, readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, cp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import http from "node:http";
@@ -12,12 +12,10 @@ assert.ok(profile && path.resolve(profile).startsWith(path.join(tmpdir(), "archi
 const testKey = JSON.parse(await readFile(path.join(profile, "localAPIKeys.json"), "utf8")).keys[0].key;
 const root = await mkdtemp(path.join(tmpdir(), "archivist-chromium-test-"));
 const extension = path.join(root, "extension");
-await mkdir(extension);
-for (const entry of ["background", "content", "shared", "sidepanel", "zotero", "vendor", "icons", "manifest.json"]) {
-  await cp(entry, path.join(extension, entry), { recursive: true });
-}
+await cp("dist", extension, { recursive: true });
+await cp("background/save-job-repo.js", path.join(extension, "background/save-job-repo.js"));
 // Test-only copy binds every API request to the disposable server.
-for (const file of ["zotero/local-client.js", "zotero/provider-local.js"]) {
+for (const file of ["zotero/local-client.js", "background/service-worker.js"]) {
   const target = path.join(extension, file);
   await writeFile(target, (await readFile(target, "utf8")).replaceAll("23119", "23129"));
 }
@@ -64,7 +62,10 @@ try {
     return chrome.runtime.sendMessage({ type: "AUTHOR_QUEUE_FROM_SELECTION", payload: { links: ["/public", "/private"].map((suffix, i) => ({ id: `fixture-${i}`, url: origin + suffix, title: suffix, selected: true })) } });
   }, fixtureOrigin);
   assert.equal(authored.ok, true, JSON.stringify(authored));
-  await panel.evaluate(() => chrome.runtime.sendMessage({ type: "SET_QUEUE_SETTINGS", payload: { queueSettings: { interItemDelayMs: 0, interItemDelayJitterMs: 0 } } }));
+  await panel.evaluate(async () => {
+    const { setQueueSettingsAction } = await import(chrome.runtime.getURL("sidepanel/actions.js"));
+    await setQueueSettingsAction({ interItemDelayMs: 0, interItemDelayJitterMs: 0 });
+  });
   const started = await panel.evaluate(() => chrome.runtime.sendMessage({ type: "START_QUEUE" }));
   assert.equal(started.ok, true, JSON.stringify(started));
   let state;

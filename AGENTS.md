@@ -2,10 +2,10 @@
 
 ## Project Structure & Module Organization
 - `manifest.json`: MV3 extension entrypoint and permission model.
-- `background/`: service-worker runtime (`message-router`, queue engine/lifecycle, storage repo, provider orchestration).
+- `background/`: service-worker runtime (`message-router`, queue engine/lifecycle, provider orchestration).
 - `sidepanel/`: panel UI (`panel.html/css/js`) plus focused controllers and store/render modules.
 - `content/collector.js`: on-demand page link collection logic.
-- `shared/`: cross-surface contracts and state normalization utilities.
+- `shared/`: cross-surface contracts, storage repository, state normalization and timeout utilities.
 - `zotero/`: authenticated local Zotero API client, settings, and provider.
 - `tests/`: module-level `node:test` suites and `tests/test-helpers/` mocks.
 - `docs/`: architecture and design notes for extension behavior and constraints.
@@ -15,7 +15,7 @@
 - `npm test`: run all tests (`node --test tests/*.mjs`).
 - `npm run test:watch`: rerun tests on file changes.
 - `npm run build`: package the pinned snapshot/checksum dependencies before loading the extension.
-- For manual validation, load the repo root in Chromium via `chrome://extensions` -> **Developer mode** -> **Load unpacked**.
+- For manual validation, build first and load `dist/` in Chromium via `chrome://extensions` -> **Developer mode** -> **Load unpacked**. The source root is not loadable.
 
 ## Coding Style & Naming Conventions
 - Language/runtime: modern JavaScript ES modules (`import`/`export`), MV3 service worker.

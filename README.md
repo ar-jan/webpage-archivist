@@ -16,8 +16,8 @@ is not required.
    ```
 
 3. Open Chromium's `chrome://extensions`, enable **Developer mode**, and **Load
-   unpacked** from this repository. After updating source/builds, click **Reload**
-   on the extension. Chromium 120+ is required.
+   unpacked** and select this repository's **`dist/` directory**. After updating,
+   rebuild and click **Reload** on the extension. Chromium 120+ is required.
 4. Open Archivist's side panel, click **Connect Zotero**, grant local access, and
    choose **Always Allow** in Zotero's authorization dialog. Keep the panel open
    until the connection finishes. One-time authorization cannot complete a save,
@@ -25,16 +25,11 @@ is not required.
 5. Choose a library or collection in **Save to**. New items use that destination;
    retries retain the destination selected when the save began.
 
-The worker's small checksum dependency (`vendor/md5.js`) is included in Git so
-the panel and queue can start in a fresh checkout. Snapshot capture still requires
-the generated SingleFile files: rerun `npm ci && npm run build` after updating,
-in the same folder that the browser loads, then reload the extension.
-
-If an older checkout reports **Service worker registration failed. Status code:
-3** together with **An unknown error occurred when fetching the script**, check
-that `vendor/md5.js` exists. A missing copy of that imported file produces both
-errors before the worker can run. Update to the version including it or run the
-build commands above. Saving selector rules does not cause this startup error.
+`dist/` is the complete extension: the worker includes its checksum dependency,
+and the snapshot bundles, source and license notices are present. The source
+checkout itself is not loadable. Switching an existing unpacked installation from
+the repository root to `dist/` creates a separate extension identity; configure
+its rules and connect to Zotero again. No old extension state is migrated.
 
 ## Archive pages
 
@@ -49,6 +44,8 @@ is retained for retry.
 Link collection runs directly from the panel and does not need Zotero to respond.
 It scrolls by default to find links loaded later. If reading the page stalls,
 Collect becomes available again with a timeout message; the previous links remain.
+Keep the panel open until collection finishes. Queue saves run in the background
+and continue after the panel closes.
 
 **Start** requests access to queued sites and processes one
 page at a time. Logged-in page content is captured in your browser.
@@ -59,6 +56,9 @@ failed or stopped jobs using their original item keys, avoiding replacement item
 when a response was lost. Items marked **needs review** require checking Zotero;
 they are excluded from ordinary retry. Clearing/removing a queue entry removes its
 local recovery record, not its Zotero items.
+Cleanup waits for outstanding save operations to settle after cancellation.
+If a queue command times out, inspect the queue status before retrying: a timeout
+does not cancel a command that the worker already received.
 
 The initial capture implementation supports HTML pages up to 20 MiB, with a
 120-second capture deadline. It embeds accessible assets and removes scripts.
@@ -77,10 +77,11 @@ to captured pages or zotero.org.
 ## Development and verification
 
 ```sh
-npm test                    # builds dependencies and runs module tests
+npm test                    # builds dist, tests modules and a clean-source rebuild
 npm run test:watch
 node tests/integration/selector-rules.mjs  # isolated Chromium selector/collection test
-node tests/integration/worker-startup.mjs  # registration/reload from source files only
+node tests/integration/worker-startup.mjs  # complete package registration/reload
+node tests/integration/panel-startup.mjs  # delayed initialization and offline readiness
 ```
 
 The opt-in real-browser test uses a **disposable** Zotero profile with its own data
@@ -92,7 +93,10 @@ ARCHIVIST_TEST_ZOTERO_PROFILE=/tmp/archivist-zotero-test-EXAMPLE/profile \
   node tests/integration/local-zotero.mjs
 ```
 
-This creates a separate Chromium profile, builds a test copy targeting the
+These browser tests load a copy of `dist/`; run the build first. Set
+`ARCHIVIST_TEST_CHROMIUM=/usr/bin/brave-browser` to exercise Brave.
+
+The Zotero test creates a separate browser profile and a test copy targeting the
 isolated API port, archives public/authenticated fixtures, and checks offline HTML,
 CSS and image rendering. It leaves its temporary artifacts for inspection.
 

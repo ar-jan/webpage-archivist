@@ -15,11 +15,10 @@ function harness(overrides = {}) {
 }
 test("local provider diagnostics require permission, matching authorization and a valid destination", async () => {
   const h = harness();
-  const resolved = await h.orchestrator.resolveSaveProvider();
-  assert.equal(resolved.provider.mode, "local_zotero");
-  assert.equal(resolved.diagnostics.destinationReady, true);
+  const diagnostics = await h.orchestrator.refreshProviderDiagnostics();
+  assert.equal(diagnostics.destinationReady, true);
   const missing = harness({ hasPermission: async () => false });
-  assert.equal((await missing.orchestrator.resolveSaveProvider()).provider, null);
+  assert.equal((await missing.orchestrator.refreshProviderDiagnostics()).destinationReady, false);
   const wrong = harness({ getSettings: async () => ({ auth: { serverID: "different", key: "test" } }) });
   assert.equal((await wrong.orchestrator.refreshProviderDiagnostics()).authorized, false);
 });
