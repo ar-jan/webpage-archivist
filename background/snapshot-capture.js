@@ -11,8 +11,18 @@ export async function captureSnapshot({ tabId, captureId, signal, chromeImpl = g
     throw error;
   }
   signal?.throwIfAborted();
-  await chromeImpl.scripting.executeScript({ target: { tabId, frameIds: [0] }, world: "MAIN", files: ["vendor/single-file-hooks.js"] });
-  const injected = await chromeImpl.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ["content/snapshot.bundle.js"] });
+  const inject = async (file, world = "ISOLATED") => {
+    try {
+      return await chromeImpl.scripting.executeScript({ target: { tabId, frameIds: [0] }, world, files: [file] });
+    } catch (error) {
+      if (/Could not load file/i.test(error.message)) {
+        throw new Error(`Snapshot build file is missing (${file}). Run npm ci and npm run build in the loaded extension folder, then reload Archivist.`);
+      }
+      throw error;
+    }
+  };
+  await inject("vendor/single-file-hooks.js", "MAIN");
+  const injected = await inject("content/snapshot.bundle.js");
   const documentId = injected[0]?.documentId;
   if (!documentId) throw new Error("Cannot identify the capture document.");
   const target = { tabId, documentIds: [documentId] };

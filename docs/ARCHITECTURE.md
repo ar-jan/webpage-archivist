@@ -31,10 +31,21 @@ Connector removed the private iframe transport Archivist previously depended on.
 | Build | `scripts/build.mjs` | Pin and bundle SingleFile/SparkMD5; include source and license notices |
 
 Run `npm ci && npm run build` before loading the repository unpacked. Generated
-`content/snapshot.bundle.js` and `vendor/` are ignored by Git. `npm test` rebuilds
-them before the Node tests. Runtime modules otherwise remain native ES modules.
+`content/snapshot.bundle.js` and the SingleFile files under `vendor/` are ignored
+by Git. The small `vendor/md5.js` module and its license are checked in because
+the worker imports it at startup. No worker startup import may require an ignored
+build artifact: a missing imported file prevents registration before any error
+handler runs. `npm run build` also reproduces that checked-in checksum module.
+`npm test` rebuilds dependencies before the Node tests. Runtime modules otherwise remain native ES modules.
 There are no remotely loaded scripts. See [dependency notices](../THIRD_PARTY_NOTICES.md)
 for the AGPL SingleFile dependency; Archivist's original source retains its MIT license.
+
+The worker-startup browser regression copies only files included in the checkout,
+then verifies registration, panel commands and extension reload. It deliberately
+omits generated capture files, which are only loaded when archiving a page and
+report build instructions if absent. Earlier tests copied generated files and
+therefore missed the missing-MD5 registration failure (Brave status code 3 plus
+“An unknown error occurred when fetching the script”).
 
 Selector-rule edits are validated and saved directly from the trusted panel to
 `chrome.storage.local`. They do not depend on a worker message acknowledgement.

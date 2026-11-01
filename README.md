@@ -25,6 +25,17 @@ is not required.
 5. Choose a library or collection in **Save to**. New items use that destination;
    retries retain the destination selected when the save began.
 
+The worker's small checksum dependency (`vendor/md5.js`) is included in Git so
+the panel and queue can start in a fresh checkout. Snapshot capture still requires
+the generated SingleFile files: rerun `npm ci && npm run build` after updating,
+in the same folder that the browser loads, then reload the extension.
+
+If an older checkout reports **Service worker registration failed. Status code:
+3** together with **An unknown error occurred when fetching the script**, check
+that `vendor/md5.js` exists. A missing copy of that imported file produces both
+errors before the worker can run. Update to the version including it or run the
+build commands above. Saving selector rules does not cause this startup error.
+
 ## Archive pages
 
 Collect links from an HTTP(S) page, grant access when prompted, select links and
@@ -69,6 +80,7 @@ to captured pages or zotero.org.
 npm test                    # builds dependencies and runs module tests
 npm run test:watch
 node tests/integration/selector-rules.mjs  # isolated Chromium selector/collection test
+node tests/integration/worker-startup.mjs  # registration/reload from source files only
 ```
 
 The opt-in real-browser test uses a **disposable** Zotero profile with its own data
