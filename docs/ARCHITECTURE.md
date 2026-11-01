@@ -35,6 +35,13 @@ them before the Node tests. Runtime modules otherwise remain native ES modules.
 There are no remotely loaded scripts. See [dependency notices](../THIRD_PARTY_NOTICES.md)
 for the AGPL SingleFile dependency; Archivist's original source retains its MIT license.
 
+Selector-rule edits are validated and saved directly from the trusted panel to
+`chrome.storage.local`. They do not depend on a worker message acknowledgement.
+The panel bounds each save attempt to five seconds, retaining the dirty draft on
+failure and ignoring late acknowledgements. Collect waits for a successful save
+before using edited rules. The selector integration test covers native side-panel
+saves with the worker stopped, hung storage, retry, and late responses.
+
 ## Connection and destination
 
 The panel's **Connect Zotero** click requests optional `http://127.0.0.1/*` access.

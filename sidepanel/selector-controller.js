@@ -8,6 +8,7 @@ export function createSelectorController({
   setSelectorRulesActionImpl,
   setStatus,
   messageFromError,
+  saveTimeoutMs = 5000,
   logger = console
 }) {
   const panelState = panelStore.state;
@@ -38,8 +39,19 @@ export function createSelectorController({
 
     const revisionToSave = editRevision;
     savePromise = Promise.resolve().then(async () => {
+      let timer;
       try {
-        const response = await setSelectorRulesActionImpl(draftRules);
+        const response = await Promise.race([
+          setSelectorRulesActionImpl(draftRules),
+          new Promise((resolve) => {
+            timer = setTimeout(() => resolve({
+              ok: false,
+              error: {
+                message: "Saving selector rules timed out. Your edits are still here; try Save rules again."
+              }
+            }), saveTimeoutMs);
+          })
+        ]);
 
         if (!response || response.ok !== true) {
           setStatus(messageFromError(response?.error) ?? "Failed to save selector rules.");
@@ -60,6 +72,8 @@ export function createSelectorController({
         logger.error("[webpage-archivist] Failed to save selector rules.", error);
         setStatus("Failed to save selector rules.");
         return false;
+      } finally {
+        clearTimeout(timer);
       }
     }).finally(() => {
       savePromise = null;

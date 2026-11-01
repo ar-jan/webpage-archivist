@@ -30,7 +30,10 @@ is not required.
 Collect links from an HTTP(S) page, grant access when prompted, select links and
 add them to the queue. After editing selector rules, use **Save rules** or click
 **Collect Links** to save them automatically before collection. Invalid rules or
-a failed save keep the draft editable and stop collection.
+a failed save keep the draft editable and stop collection. Rule saves write
+directly to extension storage without a service-worker round trip. If storage
+does not respond within five seconds, Save becomes available again and the draft
+is retained for retry.
 
 **Start** requests access to queued sites and processes one
 page at a time. Logged-in page content is captured in your browser.

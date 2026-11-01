@@ -66,7 +66,7 @@ test("selector heading formatter prefers name then id", () => {
   assert.equal(formatRuleHeading("", ""), "Unnamed rule");
 });
 
-function createSaveHarness(saveAction) {
+function createSaveHarness(saveAction, options = {}) {
   const panelStore = createPanelStore();
   const fields = new Map([
     [".rule-name-input", { value: "Articles" }],
@@ -85,7 +85,8 @@ function createSaveHarness(saveAction) {
     setSelectorRulesActionImpl: saveAction,
     setStatus: status => statuses.push(status),
     messageFromError: error => error?.message,
-    logger: { error() {} }
+    logger: { error() {} },
+    ...options
   });
   return { controller, panelStore, saveRulesButton, statuses, fields };
 }
@@ -144,4 +145,26 @@ test("Collect joins an in-flight save and newer edits are not overwritten or mar
 test("collecting with saved rules does not write them again", async () => {
   const h = createSaveHarness(() => assert.fail("No save needed"));
   assert.equal(await h.controller.ensureSelectorRulesSaved(), true);
+});
+
+test("a hung save times out, restores the button, and ignores a late acknowledgement", async () => {
+  let finish;
+  const h = createSaveHarness(() => new Promise(resolve => { finish = resolve; }), { saveTimeoutMs: 5 });
+  h.controller.markSelectorRulesDirty();
+  const saving = h.controller.saveSelectorRules();
+  const collecting = h.controller.ensureSelectorRulesSaved();
+  assert.equal(await saving, false);
+  assert.equal(await collecting, false);
+  assert.match(h.statuses.at(-1), /timed out/);
+  assert.equal(h.saveRulesButton.textContent, "Save rules");
+  assert.equal(h.saveRulesButton.disabled, false);
+  assert.equal(h.panelStore.state.selectorRulesDirty, true);
+  h.fields.get(".rule-selector-input").value = "a.newer";
+  h.controller.markSelectorRulesDirty();
+  finish({ ok: true, selectorRules: [{ id: "articles", cssSelector: "a.article" }] });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(h.fields.get(".rule-selector-input").value, "a.newer");
+  assert.equal(h.panelStore.state.selectorRulesDirty, true);
+  assert.match(h.statuses.at(-1), /timed out/);
 });

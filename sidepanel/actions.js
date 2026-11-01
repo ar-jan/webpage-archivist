@@ -1,4 +1,12 @@
-import { MESSAGE_TYPES, toOriginPattern } from "../shared/protocol.js";
+import {
+  ERROR_CODES,
+  MESSAGE_TYPES,
+  STORAGE_KEYS,
+  createError,
+  createSuccess,
+  sanitizeSelectorRules,
+  toOriginPattern
+} from "../shared/protocol.js";
 
 export async function getPanelStateAction() {
   return sendRuntimeMessage(MESSAGE_TYPES.GET_PANEL_STATE);
@@ -39,9 +47,15 @@ export async function queueLifecycleAction(messageType, payload = undefined) {
 }
 
 export async function setSelectorRulesAction(rules) {
-  return sendRuntimeMessage(MESSAGE_TYPES.SET_SELECTOR_RULES, {
-    rules
-  });
+  const selectorRules = sanitizeSelectorRules(rules);
+  if (!Array.isArray(rules) || selectorRules.length === 0 || selectorRules.length !== rules.length) {
+    return createError(ERROR_CODES.INVALID_SELECTOR_RULES, "One or more selector rules are invalid.");
+  }
+
+  // The panel is a trusted extension context. Persist this local setting directly
+  // rather than waiting for a service-worker message channel to acknowledge it.
+  await chrome.storage.local.set({ [STORAGE_KEYS.SELECTOR_RULES]: selectorRules });
+  return createSuccess({ selectorRules });
 }
 
 export async function getActiveTabAction() {

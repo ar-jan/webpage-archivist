@@ -1,3 +1,4 @@
+import { openNativeSidePanel } from "../test-helpers/native-sidepanel.mjs";
 // UI regression test with an isolated Chromium profile and a synthetic HTTP(S)
 // page. No Zotero instance or credentials are needed.
 import { chromium } from "playwright-core";
@@ -45,10 +46,23 @@ try {
   await custom.locator(".rule-name-input").fill("Chosen links");
   await custom.locator(".rule-selector-input").fill("a.chosen");
 
-  // Exercise explicit Save and verify that it really persisted through the worker.
+  // Even a non-responsive worker message channel must not block local rule saves.
+  await panel.evaluate(() => {
+    const send = chrome.runtime.sendMessage.bind(chrome.runtime);
+    globalThis.selectorMessages = 0;
+    chrome.runtime.sendMessage = (...args) => {
+      if (args[0].type === "SET_SELECTOR_RULES") {
+        globalThis.selectorMessages++;
+        return new Promise(() => {});
+      }
+      return send(...args);
+    };
+  });
+  // Exercise explicit Save and verify that it persisted directly to storage.
   await save.click();
   await panel.locator("#status").filter({ hasText: "Saved 3 selector rule(s)." }).waitFor();
   assert.equal(await save.isDisabled(), true);
+  assert.equal(await panel.evaluate(() => globalThis.selectorMessages), 0);
   await panel.reload();
   await panel.locator("#status").filter({ hasText: "Ready." }).waitFor();
   const stored = await panel.evaluate(() => chrome.storage.local.get("selectorRules"));
@@ -93,19 +107,58 @@ try {
   // A failed save must not silently collect using older, persisted selectors.
   await custom.locator(".rule-selector-input").fill("a.chosen");
   await panel.evaluate(() => {
-    const send = chrome.runtime.sendMessage.bind(chrome.runtime);
-    chrome.runtime.sendMessage = (...args) => args[0].type === "SET_SELECTOR_RULES"
-      ? Promise.resolve({ ok: false, error: { message: "Fixture save failed" } })
-      : send(...args);
+    globalThis.originalStorageSet = chrome.storage.local.set.bind(chrome.storage.local);
+    chrome.storage.local.set = () => Promise.reject(new Error("Fixture storage failure"));
   });
   await collectFromFixture();
-  await panel.locator("#status").filter({ hasText: "Fixture save failed" }).waitFor();
+  await panel.locator("#status").filter({ hasText: "Failed to save selector rules." }).waitFor();
   assert.equal(await panel.evaluate(() => globalThis.collectionRequests), 0);
   assert.equal(await save.isEnabled(), true);
   assert.equal(await custom.locator(".rule-selector-input").inputValue(), "a.chosen");
+  // Reproduce a save that never settles, then retry and deliver a late old reply.
+  await panel.evaluate(() => {
+    chrome.storage.local.set = () => new Promise(resolve => { globalThis.finishLateSave = resolve; });
+  });
+  await save.click();
+  await panel.locator("#status").filter({ hasText: "Saving selector rules timed out." }).waitFor();
+  assert.equal(await save.isEnabled(), true);
+  assert.equal(await custom.locator(".rule-selector-input").inputValue(), "a.chosen");
+  await custom.locator(".rule-name-input").fill("Retried rule");
+  await panel.evaluate(() => { chrome.storage.local.set = globalThis.originalStorageSet; });
+  await save.click();
+  await panel.locator("#status").filter({ hasText: "Saved 3 selector rule(s)." }).waitFor();
+  await panel.evaluate(() => globalThis.finishLateSave());
+  assert.equal(await custom.locator(".rule-heading-title").innerText(), "Retried rule");
+  assert.equal(await save.isDisabled(), true);
+  // Exercise the genuine native side panel, including after worker shutdown.
+  const native = await openNativeSidePanel(context, panel);
+  await native.evaluate(`(async () => {
+    const deadline = Date.now() + 5000;
+    while (document.querySelector("#status").textContent !== "Ready.") {
+      if (Date.now() > deadline) throw new Error("Native panel did not initialize");
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  })()`);
+  const nativeContexts = await panel.evaluate(() => chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] }));
+  assert.equal(nativeContexts.length, 1);
+  await native.stopWorker();
+  const nativeResult = await native.evaluate(`(async () => {
+    chrome.runtime.sendMessage = () => new Promise(() => {});
+    document.querySelector("#add-rule-button").click();
+    document.querySelector("#save-rules-button").click();
+    const deadline = Date.now() + 6000;
+    while (document.querySelector("#save-rules-button").textContent === "Saving…") {
+      if (Date.now() > deadline) throw new Error("Native save did not complete");
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return { status: document.querySelector("#status").textContent,
+      rules: (await chrome.storage.local.get("selectorRules")).selectorRules.length };
+  })()`);
+  assert.equal(nativeResult.status, "Saved 4 selector rule(s).");
+  assert.equal(nativeResult.rules, 4);
   assert.deepEqual(errors, []);
   await panel.screenshot({ path: path.join(root, "selector-rules.png"), fullPage: true });
-  console.log(JSON.stringify({ root, savedRules: 3, collectedLinks: 1, validationAndSaveFailuresBlockedCollection: true }));
+  console.log(JSON.stringify({ root, savedRules: 3, collectedLinks: 1, validationAndSaveFailuresBlockedCollection: true, hungSaveRecovered: true, nativePanelSavedWithoutWorker: true }));
 } finally {
   await context.close();
 }
