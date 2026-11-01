@@ -1,3 +1,4 @@
+import { createZoteroController } from "./zotero-controller.js";
 import {
   ERROR_CODES,
   STORAGE_KEYS,
@@ -80,13 +81,21 @@ const rulesSummaryEl = document.getElementById("rules-summary");
 const integrationModeEl = document.getElementById("integration-mode");
 const refreshDiagnosticsButton = document.getElementById("refresh-diagnostics-button");
 const integrationUpdatedAtEl = document.getElementById("integration-updated-at");
-const integrationBridgeRowEl = document.getElementById("integration-bridge-row");
-const integrationBridgeStatusEl = document.getElementById("integration-bridge-status");
-const integrationConnectorRowEl = document.getElementById("integration-connector-row");
-const integrationConnectorStatusEl = document.getElementById("integration-connector-status");
+const integrationAuthorizationRowEl = document.getElementById("integration-authorization-row");
+const integrationAuthorizationStatusEl = document.getElementById("integration-authorization-status");
+const integrationAccessRowEl = document.getElementById("integration-access-row");
+const integrationAccessStatusEl = document.getElementById("integration-access-status");
 const integrationZoteroRowEl = document.getElementById("integration-zotero-row");
 const integrationZoteroStatusEl = document.getElementById("integration-zotero-status");
 const integrationErrorEl = document.getElementById("integration-error");
+
+const zoteroController = createZoteroController({
+  connectButton: document.getElementById("connect-zotero-button"),
+  destinationSelect: document.getElementById("zotero-destination-select"),
+  setStatus,
+  refresh: async () => { const response = await getPanelStateAction(); if (response.ok) setProviderDiagnosticsState(response.providerDiagnostics); }
+});
+void zoteroController.loadDestinations().catch(() => {});
 
 const QUEUE_SETTINGS_MILLISECONDS_PER_SECOND = 1000;
 const DEFAULT_QUEUE_RESIZED_HEIGHT_PX = 300;
@@ -248,6 +257,7 @@ saveQueueSettingsButton.addEventListener("click", () => {
 
 refreshDiagnosticsButton.addEventListener("click", () => {
   void refreshIntegrationDiagnostics();
+  void zoteroController.loadDestinations().catch(error => setStatus(error.message));
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -423,10 +433,10 @@ function renderIntegrationState() {
     refreshDiagnosticsButton,
     integrationModeEl,
     integrationUpdatedAtEl,
-    integrationBridgeRowEl,
-    integrationBridgeStatusEl,
-    integrationConnectorRowEl,
-    integrationConnectorStatusEl,
+    integrationAuthorizationRowEl,
+    integrationAuthorizationStatusEl,
+    integrationAccessRowEl,
+    integrationAccessStatusEl,
     integrationZoteroRowEl,
     integrationZoteroStatusEl,
     integrationErrorEl,

@@ -6,6 +6,7 @@ export const QUEUE_ITEM_STATUSES = Object.freeze([
   "saving_snapshot",
   "archived",
   "failed",
+  "needs_review",
   "cancelled"
 ]);
 
@@ -217,6 +218,8 @@ export function normalizeQueueItems(input) {
       queueItem.lastError = candidate.lastError.trim();
     }
 
+    if (isHttpUrl(candidate.permissionUrl)) queueItem.permissionUrl = candidate.permissionUrl;
+    if (Array.isArray(candidate.warnings)) queueItem.warnings = candidate.warnings.filter(value => typeof value === "string").slice(0, 10);
     normalized.push(queueItem);
   }
 
@@ -314,12 +317,14 @@ export function getQueueItemCounts(queueItems) {
   const pendingCount = safeQueueItems.filter((item) => item.status === "pending").length;
   const archivedCount = safeQueueItems.filter((item) => item.status === "archived").length;
   const failedCount = safeQueueItems.filter((item) => item.status === "failed").length;
+  const reviewCount = safeQueueItems.filter((item) => item.status === "needs_review").length;
   const cancelledCount = safeQueueItems.filter((item) => item.status === "cancelled").length;
   return {
     pendingCount,
     archivedCount,
     failedCount,
     cancelledCount,
+    reviewCount,
     retriableCount: failedCount + cancelledCount
   };
 }

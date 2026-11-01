@@ -413,6 +413,7 @@ function getQueuePermissionCandidateUrls({ queueItems, queueRuntime }) {
 
     seenUrls.add(dedupeKey);
     candidateUrls.push(normalizedUrl);
+    if (typeof queueItem.permissionUrl === "string") candidateUrls.push(queueItem.permissionUrl);
   }
 
   if (typeof queueRuntime?.activeQueueItemId === "string" && queueRuntime.activeQueueItemId.length > 0) {

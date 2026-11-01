@@ -181,6 +181,7 @@ test("getQueueItemCounts aggregates queue state", () => {
     archivedCount: 1,
     failedCount: 1,
     cancelledCount: 1,
+    reviewCount: 0,
     retriableCount: 2
   });
 });

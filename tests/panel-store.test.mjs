@@ -7,9 +7,9 @@ import { QUEUE_ZOTERO_SAVE_MODES } from "../shared/state.js";
 test("panel store normalizes provider settings and diagnostics defaults", () => {
   const panelStore = createPanelStore();
 
-  assert.equal(panelStore.state.providerDiagnostics.connectorBridge.enabled, true);
-  assert.equal(panelStore.state.providerDiagnostics.connectorBridge.healthy, false);
-  assert.equal(panelStore.state.providerDiagnostics.connectorBridge.bridgeReady, null);
+  assert.equal(panelStore.state.providerDiagnostics.permissionGranted, false);
+  assert.equal(panelStore.state.providerDiagnostics.reachable, false);
+  assert.equal(panelStore.state.providerDiagnostics.authorized, false);
   assert.equal(panelStore.state.queueSettings.interItemDelayMs, 5000);
   assert.equal(panelStore.state.queueSettings.interItemDelayJitterMs, 2000);
   assert.equal(

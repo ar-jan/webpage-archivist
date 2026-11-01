@@ -14,6 +14,7 @@ export function createQueueLifecycleHandlers({
       return createError(ERROR_CODES.BAD_REQUEST, "Stop or pause the queue before clearing it.");
     }
 
+    queueEngine.cancelActiveSave?.();
     if (Number.isInteger(queueRuntime.activeTabId)) {
       await queueEngine.closeTabIfPresent(queueRuntime.activeTabId);
     }
@@ -75,6 +76,7 @@ export function createQueueLifecycleHandlers({
       return createError(ERROR_CODES.QUEUE_ITEM_NOT_FOUND, "Queue item was not found.");
     }
 
+    if (queueRuntime.activeQueueItemId === queueItemId) queueEngine.cancelActiveSave?.();
     const nextQueueItems = [...queueItems];
     nextQueueItems.splice(removeIndex, 1);
     await saveQueueItems(nextQueueItems);
@@ -218,6 +220,7 @@ export function createQueueLifecycleHandlers({
   }
 
   async function stopQueue() {
+    queueEngine.cancelActiveSave?.();
     const queueRuntime = await getQueueRuntime();
     const queueItems = await getQueueItems();
     const activeTabId = Number.isInteger(queueRuntime.activeTabId) ? queueRuntime.activeTabId : null;
@@ -230,7 +233,7 @@ export function createQueueLifecycleHandlers({
         nextQueueItems[activeIndex] = {
           ...nextQueueItems[activeIndex],
           status: "cancelled",
-          lastError: "Queue was stopped before completion.",
+          lastError: "Stopped. Retry reconciles any Zotero writes already made.",
           updatedAt: Date.now()
         };
         await saveQueueItems(nextQueueItems);

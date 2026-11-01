@@ -1,34 +1,75 @@
-# webpage-archivist
+# Webpage Archivist
 
-A Chromium browser extension to collect links from a web page and archive selected pages to Zotero via the Zotero Connector browser plugin.
+A Chromium extension that collects links and archives selected pages directly to
+Zotero Desktop as webpage items with HTML snapshots. The browser Zotero Connector
+is not required.
 
-## Prerequisites
+## Install and connect
 
-- Have [Zotero](https://www.zotero.org/download/) installed
-- Have the official [Zotero Connector](https://chromewebstore.google.com/detail/zotero-connector/ekhagklcjbdpajgpjgmbionohlpdbjgc) installed
+1. Use Zotero 10 with its local API enabled. The implementation was investigated
+   against 10.0.6 and tested end to end against 10.0.7.
+2. Install Node.js 24+, clone this repository, and run:
 
-## Installation
+   ```sh
+   npm ci
+   npm run build
+   ```
 
-- Git clone this repository (or download and unpack the ZIP version)
-- Enable `Developer mode` on your browser's extension page
-- Click `Load unpacked` and point it at your copy of `webpage-archivist`
+3. Open Chromium's `chrome://extensions`, enable **Developer mode**, and **Load
+   unpacked** from this repository. After updating source/builds, click **Reload**
+   on the extension. Chromium 120+ is required.
+4. Open Archivist's side panel, click **Connect Zotero**, grant local access, and
+   choose **Always Allow** in Zotero's authorization dialog. Keep the panel open
+   until the connection finishes. One-time authorization cannot complete a save,
+   because a snapshot requires several writes.
+5. Choose a library or collection in **Save to**. New items use that destination;
+   retries retain the destination selected when the save began.
 
-## Usage
+## Archive pages
 
-- Toggle the `ZA` extension icon to open the side panel
-- Use `All anchor links` or create your own selector rules
-- Click `Collect Links` and give the extension permission to access the page
-- Select URLs to add to the download queue
-- To process the queue, make sure Zotero is running (all three integration status indicators should be green)
+Collect links from an HTTP(S) page, grant access when prompted, select links and
+add them to the queue. **Start** requests access to queued sites and processes one
+page at a time. Logged-in page content is captured in your browser.
 
-## Documentation
+**Pause** stops starting new items while the current save settles. **Stop** cancels
+work but cannot undo writes already made to Zotero. **Retry / Reconcile** resumes
+failed or stopped jobs using their original item keys, avoiding replacement items
+when a response was lost. Items marked **needs review** require checking Zotero;
+they are excluded from ordinary retry. Clearing/removing a queue entry removes its
+local recovery record, not its Zotero items.
 
-- [Side panel screenshot](docs/zotero-archivist-sidepanel-reddit-datahoarder.png)
-- Architecture and design overview: `docs/ARCHITECTURE.md`
+The initial capture implementation supports HTML pages up to 20 MiB, with a
+120-second capture deadline. It embeds accessible assets and removes scripts.
+Embedded frames, video/audio, and resources blocked by page-origin restrictions
+are not preserved; missing-resource warnings appear on the queue item. PDF/EPUB
+imports and metadata translators are not supported. A redirect to a new hostname
+records an extra permission requirement; use Retry / Reconcile, then Start to
+grant it.
 
-## Development
+Snapshot payloads are stored temporarily in extension IndexedDB (128 MiB total,
+24-hour retention) and deleted after successful import. Do not clear the extension's
+data to recover an interrupted save: that also deletes the keys used to reconcile
+it. Local API authorization stays in trusted extension storage and is never sent
+to captured pages or zotero.org.
+
+## Development and verification
 
 ```sh
-# Run all tests:
-npm test
+npm test                    # builds dependencies and runs module tests
+npm run test:watch
 ```
+
+The opt-in real-browser test uses a **disposable** Zotero profile with its own data
+directory, local API on port 23129, and a test-only authorization key. It refuses
+profiles outside `/tmp/archivist-zotero-test-*`. With that profile running:
+
+```sh
+ARCHIVIST_TEST_ZOTERO_PROFILE=/tmp/archivist-zotero-test-EXAMPLE/profile \
+  node tests/integration/local-zotero.mjs
+```
+
+This creates a separate Chromium profile, builds a test copy targeting the
+isolated API port, archives public/authenticated fixtures, and checks offline HTML,
+CSS and image rendering. It leaves its temporary artifacts for inspection.
+
+See [architecture](docs/ARCHITECTURE.md) and [dependency notices](THIRD_PARTY_NOTICES.md).

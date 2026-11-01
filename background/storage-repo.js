@@ -1,5 +1,4 @@
 import {
-  ANCHOR_SELECTOR_RULE_ID,
   DEFAULT_SELECTOR_RULES,
   STORAGE_KEYS,
   sanitizeSelectorRules
@@ -90,11 +89,6 @@ export async function getSelectorRules() {
   const defaults = DEFAULT_SELECTOR_RULES.map((rule) => ({ ...rule }));
 
   if (sanitizedRules.length === 0) {
-    await chrome.storage.local.set({ [STORAGE_KEYS.SELECTOR_RULES]: defaults });
-    return defaults;
-  }
-
-  if (isLegacyAnchorOnlyDefault(sanitizedRules)) {
     await chrome.storage.local.set({ [STORAGE_KEYS.SELECTOR_RULES]: defaults });
     return defaults;
   }
@@ -198,24 +192,4 @@ export async function saveQueueRuntime(queueRuntime) {
 
 export async function ensureQueueRuntime() {
   await getQueueRuntime();
-}
-
-function isLegacyAnchorOnlyDefault(rules) {
-  if (!Array.isArray(rules) || rules.length !== 1) {
-    return false;
-  }
-
-  const rule = rules[0];
-  if (!rule || typeof rule !== "object") {
-    return false;
-  }
-
-  const normalizedName = typeof rule.name === "string" ? rule.name.trim().toLowerCase() : "";
-  return (
-    rule.id === ANCHOR_SELECTOR_RULE_ID &&
-    rule.cssSelector === "a[href]" &&
-    rule.urlAttribute === "href" &&
-    rule.enabled === true &&
-    (normalizedName === "all anchor links" || normalizedName === "anchors")
-  );
 }

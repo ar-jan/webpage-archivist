@@ -115,7 +115,7 @@
               <button id="clear-queue-button" type="button" class="text-button danger">Clear Queue</button>
               <button id="clear-archived-queue-button" type="button" class="text-button">Clear Archived</button>
               <button id="reverse-queue-button" type="button" class="text-button">Reverse</button>
-              <button id="retry-failed-queue-button" type="button" class="text-button">Retry Failed</button>
+              <button id="retry-failed-queue-button" type="button" class="text-button">Retry / Reconcile</button>
             </div>
 
             <div class="queue-settings-row">
@@ -149,12 +149,17 @@
           <button id="refresh-diagnostics-button" type="button" class="icon-button small" title="Refresh Status">↻</button>
         </div>
 
+        <div class="zotero-connection-controls">
+          <button id="connect-zotero-button" type="button" class="action-button">Connect Zotero</button>
+          <label for="zotero-destination-select">Save to</label>
+          <select id="zotero-destination-select" disabled><option>Connect to choose a destination</option></select>
+        </div>
         <div class="integration-metrics">
-          <div id="integration-connector-row" class="status-dot-container" data-state="unknown" title="Zotero Connector">
-            <span class="status-dot"></span> <span class="status-label">Ext</span>
+          <div id="integration-access-row" class="status-dot-container" data-state="unknown" title="Local access">
+            <span class="status-dot"></span> <span class="status-label">Local access</span>
           </div>
-          <div id="integration-bridge-row" class="status-dot-container" data-state="unknown" title="Bridge">
-            <span class="status-dot"></span> <span class="status-label">Bridge</span>
+          <div id="integration-authorization-row" class="status-dot-container" data-state="unknown" title="Authorization">
+            <span class="status-dot"></span> <span class="status-label">Authorized</span>
           </div>
           <div id="integration-zotero-row" class="status-dot-container" data-state="unknown" title="Zotero App">
             <span class="status-dot"></span> <span class="status-label">App</span>
@@ -162,8 +167,8 @@
         </div>
         <p id="integration-error" class="integration-error-toast" hidden></p>
         <span id="integration-updated-at" hidden></span>
-        <span id="integration-connector-status" hidden></span>
-        <span id="integration-bridge-status" hidden></span>
+        <span id="integration-access-status" hidden></span>
+        <span id="integration-authorization-status" hidden></span>
         <span id="integration-zotero-status" hidden></span>
       </footer>
     </main>

@@ -168,7 +168,7 @@ test("stopQueue cancels active item, resets runtime, clears alarm and closes tab
   assert.equal(response.ok, true);
   assert.equal(response.queueRuntime.status, "idle");
   assert.equal(response.queueItems[0].status, "cancelled");
-  assert.equal(response.queueItems[0].lastError, "Queue was stopped before completion.");
+  assert.equal(response.queueItems[0].lastError, "Stopped. Retry reconciles any Zotero writes already made.");
   assert.equal(harness.calls.clearQueueAlarm, 1);
   assert.deepEqual(harness.calls.closeTabIfPresent, [77]);
   assert.equal(harness.state.queueRuntime.status, "idle");

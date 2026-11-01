@@ -156,6 +156,12 @@ export function renderQueue({ queueItems, queueTitleEl, queueSummaryEl, queueLis
       item.append(meta);
     }
 
+    if (queueItem.warnings?.length) {
+      const warnings = document.createElement("div");
+      warnings.className = "queue-item-meta";
+      warnings.textContent = queueItem.warnings.join(" ");
+      item.append(warnings);
+    }
     row.append(link, attemptsEl, removeButton, statusBadge);
     item.prepend(row);
     queueListEl.append(item);
@@ -170,10 +176,10 @@ export function renderIntegrationState({
   refreshDiagnosticsButton,
   integrationModeEl,
   integrationUpdatedAtEl,
-  integrationBridgeRowEl,
-  integrationBridgeStatusEl,
-  integrationConnectorRowEl,
-  integrationConnectorStatusEl,
+  integrationAuthorizationRowEl,
+  integrationAuthorizationStatusEl,
+  integrationAccessRowEl,
+  integrationAccessStatusEl,
   integrationZoteroRowEl,
   integrationZoteroStatusEl,
   integrationErrorEl,
@@ -188,14 +194,14 @@ export function renderIntegrationState({
     refreshDiagnosticsButton.disabled = integrationBusy;
   }
 
-  const connectorStatus = providerDiagnosticsState.connectorBridge;
-  const bridgeState = resolveBridgeDisplayState(connectorStatus);
-  const connectorState = resolveConnectorDisplayState(connectorStatus);
-  const zoteroState = resolveZoteroDisplayState(connectorStatus);
-
-  setIntegrationStatusRow(integrationBridgeRowEl, integrationBridgeStatusEl, bridgeState);
-  setIntegrationStatusRow(integrationConnectorRowEl, integrationConnectorStatusEl, connectorState);
-  setIntegrationStatusRow(integrationZoteroRowEl, integrationZoteroStatusEl, zoteroState);
+  const display = (value, label) => ({ state: value ? "healthy" : "unhealthy", label });
+  setIntegrationStatusRow(integrationAccessRowEl, integrationAccessStatusEl,
+    display(providerDiagnosticsState.permissionGranted, "Local access"));
+  setIntegrationStatusRow(integrationAuthorizationRowEl, integrationAuthorizationStatusEl,
+    display(providerDiagnosticsState.authorized, "Authorized"));
+  setIntegrationStatusRow(integrationZoteroRowEl, integrationZoteroStatusEl,
+    display(providerDiagnosticsState.reachable, "Zotero"));
+  integrationModeEl.title = providerDiagnosticsState.targetLabel || "Choose a save destination";
 
   if (typeof providerDiagnosticsState.lastError === "string" && providerDiagnosticsState.lastError.length > 0) {
     integrationErrorEl.hidden = false;
@@ -325,6 +331,7 @@ function summarizeQueueCounts(queueItems) {
     summaryParts.push(`${counts.failedCount} failed`);
   }
 
+  if (counts.reviewCount > 0) summaryParts.push(`${counts.reviewCount} need review`);
   return summaryParts.join(" • ");
 }
 
@@ -332,82 +339,7 @@ function formatQueueStatusLabel(status) {
   return status.replaceAll("_", " ");
 }
 
-function formatProviderModeLabel(mode) {
-  if (mode === "connector_bridge") {
-    return "connector bridge";
-  }
-  return "connector bridge";
-}
-
-function resolveBridgeDisplayState(connectorStatus) {
-  if (!connectorStatus || connectorStatus.enabled !== true) {
-    return {
-      state: "disabled",
-      label: "disabled"
-    };
-  }
-
-  if (connectorStatus.bridgeReady === true) {
-    return {
-      state: "healthy",
-      label: "ready"
-    };
-  }
-
-  return {
-    state: "unhealthy",
-    label: "not ready"
-  };
-}
-
-function resolveConnectorDisplayState(connectorStatus) {
-  if (!connectorStatus || connectorStatus.enabled !== true) {
-    return {
-      state: "disabled",
-      label: "disabled"
-    };
-  }
-
-  if (connectorStatus.connectorAvailable === true) {
-    return {
-      state: "healthy",
-      label: "installed"
-    };
-  }
-
-  return {
-    state: "unhealthy",
-    label: "not installed"
-  };
-}
-
-function resolveZoteroDisplayState(connectorStatus) {
-  if (!connectorStatus || connectorStatus.enabled !== true) {
-    return {
-      state: "disabled",
-      label: "disabled"
-    };
-  }
-
-  if (connectorStatus.zoteroOnline === true) {
-    return {
-      state: "healthy",
-      label: "online"
-    };
-  }
-
-  if (connectorStatus.zoteroOnline === false) {
-    return {
-      state: "unhealthy",
-      label: "offline"
-    };
-  }
-
-  return {
-    state: "unknown",
-    label: "unknown"
-  };
-}
+function formatProviderModeLabel() { return "local Zotero API"; }
 
 function setIntegrationStatusRow(rowEl, valueEl, rowState) {
   if (!(rowEl instanceof HTMLElement) || !(valueEl instanceof HTMLElement)) {

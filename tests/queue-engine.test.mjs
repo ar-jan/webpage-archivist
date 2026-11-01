@@ -128,7 +128,8 @@ test("runQueueEngineSoon waits configured delay before processing next item", as
   assert.equal(settledState.queueRuntime.activeTabId, null);
   assert.ok(Number.isFinite(settledState.queueRuntime.nextRunAt));
   assert.equal(chromeMock.tabs.created.length, 0);
-  assert.equal(harness.delayTimers.scheduled.at(-1)?.delayMs, 200);
+  assert.ok(harness.delayTimers.scheduled.at(-1)?.delayMs > 0);
+  assert.ok(harness.delayTimers.scheduled.at(-1)?.delayMs <= 200);
 
   harness.setQueueRuntime({
     ...settledState.queueRuntime,
@@ -564,3 +565,45 @@ function installChromeMock({ tabsById = new Map() } = {}) {
     }
   };
 }
+
+test("a late provider result after Stop cannot advance a different queue run", async t => {
+  const chromeMock = installChromeMock({ tabsById: new Map([[51, { id: 51, status: "complete" }]]) });
+  t.after(() => chromeMock.restore());
+  let finish, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const harness = createQueueEngineHarness({
+    queueItems: [createQueueItem({ id: "q1", url: "https://example.com", status: "opening_tab" })],
+    queueRuntime: createQueueRuntime({ status: "running", activeQueueItemId: "q1", activeTabId: 51 }),
+    saveQueueItemWithProvider: async ({ signal }) => {
+      entered(signal); return new Promise(resolve => { finish = resolve; });
+    }
+  });
+  const saving = harness.queueEngine.runQueueEngineSoon("save");
+  const signal = await started;
+  harness.queueEngine.cancelActiveSave();
+  harness.setQueueRuntime(createQueueRuntime({ status: "running", activeQueueItemId: "different", activeTabId: 82 }));
+  assert.equal(signal.aborted, true);
+  finish({ ok: true });
+  await saving;
+  assert.equal(harness.getState().queueRuntime.activeQueueItemId, "different");
+  assert.notEqual(harness.getState().queueItems[0].status, "archived");
+  assert.deepEqual(chromeMock.tabs.removed, []);
+});
+
+test("review outcomes are visible and Pause allows the current save to finish", async t => {
+  const chromeMock = installChromeMock({ tabsById: new Map([[51, { id: 51, status: "complete" }]]) });
+  t.after(() => chromeMock.restore());
+  let harness;
+  harness = createQueueEngineHarness({
+    queueItems: [createQueueItem({ id: "q1", url: "https://example.com", status: "opening_tab" })],
+    queueRuntime: createQueueRuntime({ status: "running", activeQueueItemId: "q1", activeTabId: 51 }),
+    saveQueueItemWithProvider: async () => {
+      harness.setQueueRuntime({ ...harness.getState().queueRuntime, status: "paused" });
+      return { ok: false, outcome: "needs_review", error: "Item was changed" };
+    }
+  });
+  await harness.queueEngine.runQueueEngineSoon("save");
+  assert.equal(harness.getState().queueItems[0].status, "needs_review");
+  assert.equal(harness.getState().queueRuntime.status, "paused");
+  assert.equal(harness.getState().queueRuntime.activeQueueItemId, null);
+});

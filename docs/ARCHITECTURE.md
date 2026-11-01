@@ -1,563 +1,220 @@
-# Webpage Archivist Architecture
+# Webpage Archivist architecture
 
-## 1. Status and scope
+## Status
 
-This document distinguishes the **implemented extension** from a **proposed local
-Zotero provider** investigated on 2026-11-01. The local provider is not implemented.
-No manifest, runtime, or dependency changes accompany this design.
+Archivist now uses Zotero Desktop's authenticated **local API**, directly at
+`http://127.0.0.1:23119/api/`. It captures the loaded browser document itself and
+imports a webpage plus an HTML snapshot. The official browser Connector is not
+required. The old iframe bridge and its compatibility code have been removed;
+there is no migration path for its provider state.
 
-The current extension collects and curates links successfully, but its only save
-provider, `connector_bridge`, is incompatible with installed Zotero Connector
-5.0.217. The proposed replacement would capture pages itself and communicate with
-Zotero Desktop over loopback HTTP. The official browser Connector would no longer
-be required for Archivist's saves.
+The initial protocol investigation used Zotero 10.0.6. Real integration testing
+used Zotero 10.0.7 and Chromium 156, with separate browser and Zotero profiles.
+[The investigation](LOCAL_PROVIDER_RESEARCH.md) records the upstream source
+references and the rejected Connector HTTP approach. In particular, the browser
+Connector removed the private iframe transport Archivist previously depended on.
 
-Evidence baseline:
+## Modules and build
 
-- Archivist commit `d64c034` and the runtime modules in this repository.
-- Connector tag `5.0.217`, commit
-  `ce29dfa360d1ce17a3a1f15a9d338d638a073106`, and the installed extension.
-- Zotero tag `10.0.6`, commit
-  `536244c2771f590abab9c09a3c27e615e0b318ff`, read from the supplied bare repository.
-- A running Zotero 10.0.6 instance and Chromium 156.0.8078.79.
-
-Live checks confirmed health, destination metadata, and error contracts. No library
-items were created during this investigation. Upstream save tests and source code
-support the proposed write sequence; an end-to-end Archivist implementation still
-needs the validation in section 12.
-
-## 2. Implemented architecture
-
-| Surface | Modules | Responsibility |
+| Surface | Files | Responsibility |
 | --- | --- | --- |
-| MV3 service worker | `background/service-worker.js`, `message-router.js` | Initialization, runtime messages, browser events, collection orchestration |
-| Queue | `background/queue-engine.js`, `queue-lifecycle.js` | One active tab/item, pacing, lifecycle commands, watchdog and recovery |
-| Persistence | `background/storage-repo.js`, `shared/state.js` | Normalize durable state and migrate existing values |
-| Side panel | `sidepanel/panel.js`, `actions.js`, `store.js`, `render.js`, focused controllers | Selector rules, collection, selection, queue controls and diagnostics |
-| Collector | `content/collector.js` | On-demand selector evaluation, HTTP(S) URL extraction, deduplication and bounded scrolling |
-| Provider | `background/provider-orchestrator.js`, `zotero/provider-interface.js`, `provider-connector-bridge.js` | Health checks and saving through the Connector's private iframe transport |
-| Contracts | `shared/protocol.js` | Message types, storage keys, provider modes and common validation |
+| Service worker | `background/service-worker.js`, `message-router.js` | Browser events, panel-only command authorization, collection and queue dispatch |
+| Queue | `background/queue-engine.js`, `queue-lifecycle.js` | One active item/tab, pacing, cancellation, restart handling and outcome application |
+| Queue state | `background/storage-repo.js`, `shared/state.js`, `shared/protocol.js` | Normalized queue/settings/diagnostics in `chrome.storage.local` |
+| Local client | `zotero/local-client.js` | Fixed-origin requests, API identity, deadlines, authorization, library/collection enumeration |
+| Connection settings | `zotero/local-settings.js` | Server-bound authorization and explicit destination |
+| Provider | `zotero/provider-local.js`, `background/provider-orchestrator.js` | Keyed item creation/reconciliation, three-phase upload, health diagnostics |
+| Capture | `content/snapshot.js`, `background/snapshot-capture.js` | SingleFile adapter, document binding, bounded chunk transfer |
+| Save records | `background/save-job-repo.js` | IndexedDB job metadata, temporary snapshot bytes and completion receipts |
+| Panel | `sidepanel/`, particularly `zotero-controller.js` | Link selection, queue controls, Connect Zotero, explicit destination and recovery feedback |
+| Build | `scripts/build.mjs` | Pin and bundle SingleFile/SparkMD5; include source and license notices |
 
-### Browser integration and permissions
+Run `npm ci && npm run build` before loading the repository unpacked. Generated
+`content/snapshot.bundle.js` and `vendor/` are ignored by Git. `npm test` rebuilds
+them before the Node tests. Runtime modules otherwise remain native ES modules.
+There are no remotely loaded scripts. See [dependency notices](../THIRD_PARTY_NOTICES.md)
+for the AGPL SingleFile dependency; Archivist's original source retains its MIT license.
 
-`manifest.json` declares `storage`, `alarms`, `tabs`, `scripting`, and `sidePanel`.
-HTTP(S) host permissions are optional and requested per origin. There is no
-always-on collector, build step, or bundled snapshot library. The toolbar action
-opens the native side panel.
+## Connection and destination
 
-### State and flows
+The panel's **Connect Zotero** click requests optional `http://127.0.0.1/*` access.
+The existing optional HTTP(S) host declarations cover it; no broad required host
+permission, always-on content script, offscreen permission or cloud key is added.
+The minimum Chromium version is now 120.
 
-Durable `chrome.storage.local` keys are `selectorRules`, `collectedLinks`,
-`collectorSettings`, `queueSettings`, `queueItems`, `queueRuntime`, and
-`providerDiagnostics`. No page snapshot payloads are currently stored.
+1. `GET /api/` returns API/version/server identity headers. API version 3 is required.
+2. The panel calls `POST /api/local/authorize` with `appName: "Webpage Archivist"`
+   and the server ID. Zotero presents its consent dialog. This request runs in the
+   panel, with a 120-second deadline, so a worker's fetch-response lifetime does not
+   cut off the user interaction. Closing the panel interrupts setup; Connect can be
+   tried again.
+3. The user must choose **Always Allow**. One-time keys are rejected locally because
+   the save takes multiple write requests. Authorization is not requested automatically
+   by queue jobs, and a 401 clears the saved key and asks the user to reconnect.
+4. The local key and server ID are stored in `chrome.storage.local`, restricted to
+   `TRUSTED_CONTEXTS`. They are not returned in panel-state messages, capture data,
+   URLs or logs. Content scripts cannot access this storage.
+5. The panel enumerates `/users/0/groups` and library collections. The destination
+   defaults to **My Library** upon first connection and can be changed explicitly.
+   It is bound to the server ID and pinned into each durable save job. A group API
+   path uses its group ID; collection/item identifiers are eight-character keys.
 
-Queue item statuses are `pending`, `opening_tab`, `saving_snapshot`, `archived`,
-`failed`, and `cancelled`. Runtime statuses are `idle`, `running`, and `paused`.
-There is one active item/tab, with default inter-item delay 5 seconds and jitter
-2 seconds. Collection defaults to 500 links and optional bounded auto-scrolling.
+Diagnostics distinguish host access, reachable API, stored authorization and
+available destination. Read requests cannot validate whether a stored key has been
+revoked or a group permits writes; those checks happen when Zotero handles the
+write. A destination read is therefore not a promise of file editability.
 
-Collection requests permission, injects the collector into the active page, and
-persists normalized results. Selection is persisted; queue authoring deduplicates
-against queued URLs. Start/resume preflights permissions for queued URLs. The
-engine opens a background tab, waits for completion, calls the provider, marks
-success/failure, closes the tab, and advances after the pacing delay.
+The HTTP client sends `X-Zotero-Connector-API-Version: 3` to satisfy the desktop
+server's browser-request check, alongside `Zotero-API-Version: 3`. Writes also use
+`Zotero-Server-ID` and `Zotero-API-Key`. Every response is checked for server/API
+identity. The client restricts the origin, port, paths and methods, refuses
+redirects, never follows the local `/file` route's `file://` redirects, and applies
+20-second request deadlines. An upload URL must exactly match the fixed local
+origin and the returned upload token; upload bytes do not carry the API key.
 
-The queue has recovery hooks for worker startup, tab updates/removal, and a
-watchdog alarm. **These do not guarantee exactly-once external saves.** The engine
-can call the provider again for an already-`saving_snapshot` item after restart;
-its in-memory promise chain cannot survive worker termination. This matters for
-the new provider's multi-request writes.
+## Capturing a page
 
-`GET_PANEL_STATE` refreshes integration diagnostics. The current diagnostics model
-is specific to Connector/bridge/app availability. Existing Node tests use browser
-and provider mocks; the bridge mock substitutes `executeScript` results without
-executing the iframe code.
+The queue opens one background tab and waits for loading to complete. Capture
+rechecks HTTP(S) access for the final URL, then injects packaged SingleFile hooks in
+the main world and the capture adapter in Archivist's isolated world. Subsequent
+operations are addressed to the exact top-frame `documentId`. A changed URL,
+replaced document, unsupported content type, timeout or malformed transfer fails
+before library creation.
 
-## 3. Why the existing provider broke
+SingleFile snapshots the **live DOM**, including authenticated/dynamic content.
+The adapter waits for bounded deferred loading, removes scripts, inlines accessible
+resources and emits HTML with a restrictive CSP. Resource requests stay in the
+page's network context: same-origin requests may use its session, cross-origin
+requests omit credentials and remain subject to CORS. There is no extension-side
+resource fetch proxy and no path from page scripts to the localhost API client.
 
-Archivist loads `chromeMessageIframe/messageIframe.html` from the Connector,
-opens a `MessageChannel`, and asks the iframe to forward `inject-message` commands
-to the Connector service worker. Commands include `Connector.checkIsOnline`,
-`Connector_Browser.injectTranslationScripts`, and `Messaging.sendMessage` with
-`saveAsWebpage`.
+Initial limits and coverage:
 
-Connector commit [`7f618c2`][bridge-removal], **Remove dead messaging-via-iframe
-codepath**, committed 2026-06-30, deleted the iframe files, their web-accessible
-resource declaration, and the service-worker receiver. The first containing tag
-in the supplied checkout is 5.0.211, dated 2026-07-22. The transport had originally
-handled large internal messages; the Connector had moved that traffic to chunked
-runtime messages.
+- 120-second capture deadline; 20 MiB maximum UTF-8 snapshot.
+- 15-second resource deadlines, 5 MiB per resource and 40 MiB aggregate fetched bytes.
+- Embedded frames and audio/video are omitted. Missing resource requests produce
+  visible queue warnings; this implementation does not promise complete rendering
+  for arbitrary cross-origin frames, CDNs, protected media or all lazy-loading sites.
+- PDF/EPUB imports, translator metadata, MHTML and silent URL-only fallback are excluded.
+- Redirects to an ungranted host retain the final URL as a permission requirement.
+  Retry followed by Start/Resume requests that origin through a panel gesture.
 
-A new iframe URL cannot repair this removal. Current Connector messaging is
-internal; there is no external save handler for Archivist to call. Archivist also
-misclassifies iframe/channel failures as an unavailable Connector extension.
+The worker polls the isolated capture object, then pulls ordered chunks of at most
+16,000 UTF-16 code units using `executeScript`. No snapshot is returned as one large
+runtime message. Chunks are joined before UTF-8 encoding, preserving surrogate pairs
+at boundaries; document, total length and final byte limits are checked. The
+snapshot is persisted and hashed before any Zotero write. Polls are bounded and
+provide worker activity during capture; durable records handle later restarts.
 
-Zotero Desktop is reachable. Its local ping returned HTTP 200 with
-`X-Zotero-Version: 10.0.6` and `X-Zotero-Connector-API-Version: 3`. The failure is
-before Desktop communication.
+## Save protocol and durable recovery
 
-## 4. Proposed provider and scope
-
-Add a `local_zotero` provider using
-`http://127.0.0.1:23119/connector/`, backed by an Archivist-owned capture adapter.
-Use the desktop **Connector HTTP API**, which is separate from the browser
-extension and from Zotero 10's authenticated `/api/` interface.
-
-This is the smallest replacement for the current “Web Page with Snapshot” mode.
-It preserves the desktop-selected destination behavior without requiring a
-Connector fork, Zotero plugin, account, or cloud API key. It still depends on a
-versioned desktop protocol, so tested Desktop versions and contract fixtures must
-be maintained. API version 3 alone does not prove every version has identical
-behavior.
-
-Initial scope:
-
-- Loaded HTML pages, generic webpage metadata, and an actual self-contained HTML
-  attachment. Keep authenticated page state in the browser capture workflow.
-- One capture/save job at a time, independent of whether the side panel stays open.
-- The currently selected writable Zotero library/collection, resolved immediately
-  before creating each parent item.
-- No translator execution, PDF/EPUB import, automatic cloud fallback, or silent
-  downgrade to URL-only saving. Unsupported content types get explicit errors.
-- Conservative handling of uncertain writes. Unattended, duplicate-free recovery
-  across all crashes is **not** provided by this protocol; section 11 describes a
-  stronger alternative.
-
-## 5. Desktop HTTP contract
-
-The following contract is derived from Zotero **10.0.6**, not old endpoint comments
-or assumptions from the browser Connector. See [server handlers][server-connector],
-[save sessions][save-session], and [upstream save tests][connector-tests].
-
-### Transport and health
-
-Own all localhost requests in an extension context, initially the service worker.
-Never ask page scripts to issue Zotero requests. Fix the base URL to
-`http://127.0.0.1:23119/`; restrict methods and paths to the supported operations and
-reject redirects. A future configurable port must remain loopback-only.
-
-Send JSON requests with:
-
-```text
-Content-Type: application/json
-X-Zotero-Connector-API-Version: 3
-```
-
-Read `X-Zotero-Version` and `X-Zotero-Connector-API-Version` on responses and require
-the expected protocol identity. The official Connector also sends its version in
-`X-Zotero-Version`; do not impersonate its version. Archivist can omit that request
-header and use its own identity in diagnostics. Header behavior must be included
-in browser integration tests.
-
-The desktop server checks browser-origin requests for the Connector API header.
-Host permission and that header are distinct requirements. Health should use
-`POST /connector/ping` with `{}` and parse the preferences JSON; a GET is also a
-useful diagnostic but returns HTML, not the preferences object. This route does
-not require a Zotero account or local API authorization key. See [server request
-handling][server] and [Connector HTTP server documentation][http-server-docs].
-
-| Operation | Request body | Expected result in 10.0.6 |
-| --- | --- | --- |
-| `POST /connector/ping` | `{}` | 200; JSON `prefs`, version headers |
-| `POST /connector/getSelectedCollection` | `{"switchToReadableLibrary":false}` | 200; `libraryID`, `id` (collection ID or null), names, `libraryEditable`, `filesEditable`, `editable`, plus targets/tags |
-| `POST /connector/saveSnapshot` | `sessionID`, `url`, `title` | 201; parent webpage created; body can be empty despite JSON content type |
-| `POST /connector/saveSingleFile` | Same `sessionID` and exact `url`, `title`, nonempty `snapshotContent` | 201 after importing the HTML attachment; body can be empty |
-| `POST /connector/updateSession` | `sessionID`, `target` such as `L1`/`C23`, optional tags/note | 200; moves/updates items and changes desktop selection; not part of the initial save flow |
-
-Use the actual returned identifiers. Connector target IDs such as `C23` are local
-tree IDs, not the collection keys used by the Web/local `/api/` interface.
-Do not persist the whole target/tag response when only current destination metadata
-is needed.
-
-### Save sequence
-
-Capture and validate the complete HTML **before creating anything in Zotero**.
-Generate a unique session ID per save attempt and persist it before the first write.
-Use the captured final page URL consistently for both writes; Zotero indexes the
-session's parent item by that exact URL.
-
-```json
-{
-  "sessionID": "archivist-<attempt-uuid>",
-  "url": "https://example.org/article",
-  "title": "Article title"
-}
-```
-
-After the parent request returns 201, upload:
-
-```json
-{
-  "sessionID": "archivist-<same-attempt-uuid>",
-  "url": "https://example.org/article",
-  "title": "Article title",
-  "snapshotContent": "<!doctype html><html>...self-contained captured page...</html>"
-}
-```
-
-`saveSnapshot` only creates the webpage item in this version. It does not fetch the
-URL or turn raw `outerHTML` into a snapshot. `saveSingleFile` writes the supplied
-HTML as an imported `text/html` attachment and awaits the import before returning
-201. Neither response provides a durable item key for later reconciliation.
+IndexedDB contains `jobs` and `payloads` object stores. A job records its queue ID,
+server/library/collection, parent and attachment keys, captured final URL/title,
+creation time, capture warnings, byte count, MD5, phase and acknowledged item writes.
+Payload plus initial job are committed in one transaction before creating library
+items. MD5 is required by Zotero's upload protocol, not used as an authentication
+mechanism.
 
 ```mermaid
 sequenceDiagram
   participant Q as Queue / local provider
-  participant T as Queue tab / capture adapter
-  participant Z as Zotero Desktop
-  Q->>Z: ping + destination preflight
-  Q->>T: Capture authorized final document
-  T-->>Q: Bounded HTML chunks + capture metadata
-  Q->>Q: Persist payload and save attempt
-  Q->>Z: Recheck destination; saveSnapshot(sessionID, url, title)
-  Z-->>Q: 201 parent created
-  Q->>Q: Persist parent-created receipt
-  Q->>Z: saveSingleFile(sessionID, url, title, snapshotContent)
-  Z-->>Q: 201 attachment imported
-  Q->>Q: Persist completion, mark archived, clean up
+  participant B as Browser document
+  participant D as Extension IndexedDB
+  participant Z as Zotero local API
+  Q->>Z: Check server and destination
+  Q->>B: Capture live HTML and pull bounded chunks
+  Q->>D: Persist snapshot, destination, random item keys and hash
+  Q->>Z: GET parent by key; POST keyed webpage if absent
+  Q->>D: Record parent acknowledgement
+  Q->>Z: GET attachment by key; POST imported_url attachment if absent
+  Q->>D: Record attachment acknowledgement
+  Q->>Z: Authorize file upload with MD5 and If-None-Match: *
+  Q->>Z: Upload raw UTF-8 bytes to returned loopback URL
+  Q->>Z: Register upload token with If-None-Match: *
+  Z-->>Q: 204 registered
+  Q->>Z: Read attachment metadata and verify MD5
+  Q->>D: Persist completion and delete payload atomically
+  Q->>Q: Mark queue item archived
 ```
 
-### Completion and destination caveats
+Creation uses `version: 0` with keys generated and persisted by Archivist. Reads by
+key precede creates. Batch HTTP 200 alone is insufficient: the provider checks
+per-object failure entries and reads the keyed object back. Existing items must
+match their expected identity/URL/type/parent/collection before being reused; user
+changes or acknowledged items later deleted cause `needs_review`. The provider
+never overwrites conflicting objects or silently chooses replacement keys.
 
-- Require **201 from both writes**, not just `response.ok`. `saveSingleFile` can
-  return **200 with `Library files are not editable.` without saving a file**.
-  Preflight both item and file editability; do not claim this is success.
-- Parse response bodies conditionally. Do not call `response.json()` on an empty
-  successful response simply because its content type says JSON.
-- There is **no `/connector/sessionProgress` endpoint in 10.0.6**. A live probe
-  returned 404. Do not design completion around older polling examples.
-- Destination selection is mutable. `saveSnapshot` resolves it at creation time;
-  `saveSingleFile` also checks current destination file editability. Preflight and
-  recheck near each write, but do not promise an atomically pinned destination.
-  Pause on an observed change after parent creation. A fixed destination picker
-  is a separate feature, better served by section 11's explicit library API.
-- A parent may remain after an attachment failure. Report that partial result;
-  do not silently create a replacement parent or delete library items to hide it.
+Uploads have authorization, byte transfer and registration phases. The file
+precondition prevents overwriting an existing file. If the attachment already
+reports the expected MD5 after a lost response, the provider can finish without
+reuploading. A different MD5 requires review. Expired upload tokens are harmless to
+item identity: a retry obtains a new token for the same attachment. A completed
+local receipt is authoritative if the worker stopped before updating the queue.
 
-## 6. Snapshot capture is a first-class component
-
-Bundle and pin a browser snapshot engine behind `snapshot-capture.js`. SingleFile
-is the leading candidate because the Connector itself uses
-`singlefile.getPageData(...).content`; its wrapper illustrates resource fetching,
-page-world hooks and lazy-loading handling. Implement Archivist's adapter against
-a pinned upstream build instead of importing files from another installed
-extension. See [Connector snapshot capture][singlefile-adapter].
-
-Dependency selection is still open: the local Connector bundle and upstream
-[single-file-core][singlefile-core] carry AGPL-3.0 licensing, while this repository
-currently has an MIT license. Decide the dependency/distribution licensing approach
-before vendoring code, retain notices and record the exact revision and build
-recipe. This investigation does not change the project's license.
-
-Capture requirements:
-
-- Inject only for an active queue job. Run capture/control logic in Archivist's
-  isolated world. If the chosen engine needs page-world hooks, keep them small and
-  package-owned; send no localhost capability or credentials into page context.
-- Wait for a bounded document readiness/settling period. Tab `complete` alone does
-  not establish that a SPA, images or lazy-loaded content are ready. Capture has
-  its own deadline and must work in a background tab.
-- Record `requestedUrl`, actual final URL, document identity, title, content type,
-  capture time, byte count, payload hash and capture warnings. Prefer document
-  title with the collected link title as fallback.
-- Recheck permission after navigation/redirect and abort on a changed document
-  during capture. A new hostname needs a user-gesture permission request in the
-  panel; do not repeatedly fail or silently grant broad access.
-- Define supported frame/resource coverage. Same-origin page fetches can retain
-  the page's login context. Cross-origin resources may need separately granted
-  host access and an extension-side fetch adapter. Site permission for the page
-  does not cover all CDNs. Report missing resources; do not claim universal
-  authenticated or cross-origin-frame fidelity.
-- Keep resource fetches separate from the fixed localhost API client. Any resource
-  broker validates sender/job, scheme, redirects, size and permitted origin;
-  block loopback/local-service destinations so a page cannot turn capture into
-  arbitrary localhost requests. Add bounded concurrency and request deadlines.
-- Capture failure must not fall back to raw DOM HTML or pretend a URL-only parent
-  is an archive. Specify which missing optional assets produce warnings and which
-  invalidate a capture before implementing the quality checks.
-
-Native `chrome.pageCapture.saveAsMHTML()` produces MHTML, while the examined Zotero
-snapshot path imports HTML. It is not a format-compatible drop-in replacement.
-Supporting MHTML would require a different attachment/import and viewing design.
-See [Chrome pageCapture][page-capture].
-
-### Payload transfer and temporary storage
-
-Do not return a large snapshot through one `executeScript` result or one runtime
-message. Chrome's [message limit][chrome-messaging] is 64 MiB; JSON escaping adds
-size. Use ordered chunks with acknowledgements, attempt/document identity, total
-length validation, and an integrity hash. Proposed starting limits are 512 KiB
-encoded messages, a 20 MiB UTF-8 snapshot, and a 120-second capture deadline;
-these are product limits to validate, not Zotero limits. Account for resource
-buffers, JSON copies and UTF-8 expansion when enforcing memory bounds.
-
-Store temporary payloads under extension-origin IndexedDB, keyed by attempt ID.
-Keep only metadata/references in `chrome.storage.local`. This changes the current
-metadata-only persistence design and requires bounded retention, quota handling,
-and cleanup after success, cancellation, expiry and startup. Do not log snapshot
-HTML, cookies or authorization headers. Delete abandoned payloads promptly; retain
-only a short, documented window for recoverable upload failures.
-
-The first implementation can keep HTTP requests in the service worker with
-explicit deadlines below Chrome's 30-second fetch-response limit (start with 20
-seconds and measure). Capture completion/progress messages wake the worker; an
-open port or a pending promise alone is not durable execution. Persist checkpoints
-and resume or classify interruption conservatively. [Worker lifetime rules][chrome-lifecycle]
-apply even if a panel is open.
-
-If representative captures/uploads cannot fit those bounds, add a packaged
-**offscreen upload document**, using `BLOBS` only when actually handling Blobs,
-with its own receipt persistence. It requires the `offscreen` permission and
-runtime messaging; it cannot call `chrome.storage` or other extension APIs directly.
-It also cannot recreate the original page's authenticated live DOM. Treat this as
-a measured follow-up, not a way to avoid recovery design. See [Offscreen API][chrome-offscreen].
-
-## 7. Queue jobs, partial saves and recovery
-
-The current provider's `{ok, error}` result and queue restart behavior are
-insufficient for two non-atomic external writes. Introduce a durable attempt record
-and an outcome that distinguishes safe failure, partial save, uncertain save,
-interruption and confirmed completion.
-
-Suggested attempt metadata:
-
-```text
-attemptId, queueItemId, providerMode, sessionId, generation
-requestedUrl, finalUrl, tabId, documentId, title
-expectedDestination, payloadRef, payloadBytes, payloadHash
-phase, startedAt, updatedAt, deadlineAt
-parentAcknowledged, attachmentAcknowledged, lastHttpStatus, lastError
-```
-
-Proposed phases:
-`capturing -> captured -> creating_parent -> parent_created -> uploading_snapshot
--> completed`, with terminal `failed_before_write`, `partial`, `needs_review`, and
-`cancelled_before_write` outcomes. Persist each write-intent phase **before sending**
-and its receipt after acknowledgement. Atomically store attempt/receipt changes
-within their storage domain and tolerate an interrupted update of queue metadata:
-`completed` is authoritative when reconciling a still-active queue item.
-
-| Interrupted/failed phase | Recovery rule |
+| Situation | Outcome |
 | --- | --- |
-| Before a write was dispatched | Safe to recapture/retry after validating permission and document; discard invalid partial chunks |
-| `creating_parent`, no durable 201 receipt | `needs_review`; a parent may exist. Do not mint another session automatically |
-| Parent 201 persisted, upload definitely not dispatched | Reuse the same session and payload after preflight; missing session requires review |
-| Upload explicitly refused before import, e.g. 200 files-not-editable | `partial`; an explicit upload retry may reuse the session after resolving the cause |
-| `uploading_snapshot`, no durable 201 receipt | `needs_review`; repeating the upload may add a second attachment |
-| Attachment 201 persisted | Reconcile to `archived` and finish local cleanup without repeating any write |
-| Zotero restart / `SESSION_NOT_FOUND` after parent creation | Preserve partial/uncertain result; do not create a new parent automatically |
+| Capture failure or API unavailable | Failed; retry after fixing the cause |
+| Lost create/upload/register response | Failed; retry reads the same keys and reconciles before further writes |
+| Worker restarts with an active save | Queue resumes; persisted job avoids new keys/capture |
+| Destination changed in panel | Existing jobs retain their original target |
+| Wrong server, changed/deleted item, conflicting file | Needs review; excluded from ordinary retry |
+| Retained payload missing/expired before completion | Needs review; no replacement parent is created |
+| Durable completion receipt exists | Mark archived without another write |
 
-Important protocol limitations:
+This is recovery through keyed objects and conditional writes, not a multi-request
+transaction. A parent or empty attachment can remain after a failure. A crash inside
+Zotero's own filesystem/database commit can still need manual review. The extension
+does not delete or roll back library objects to hide a partial result. Metadata MD5
+is the API receipt used by the provider; the integration test additionally reads and
+renders the actual files from the disposable library.
 
-- Reusing an existing session ID for `saveSnapshot` returns **409 `SESSION_EXISTS`**,
-  not the original successful result. A session is registered before the save
-  completes, so 409 does not prove a parent was successfully created.
-- `saveSingleFile` is not idempotent for a webpage session: each successful call
-  imports an attachment. A timeout, lost response, worker crash or abort cannot
-  prove that no side effect occurred.
-- Sessions live in Zotero's memory. Do not rely on persistence across app restart
-  or a fixed retention duration, and do not invent a session-query API.
-- `archived` requires validated capture plus durable acknowledgement of attachment
-  import. No per-item “archived” flag should be set after parent creation alone.
+Payload retention is bounded to 128 MiB total and 24 hours. Successful jobs delete
+the payload immediately; receipts remain while the queue entry exists. Cleanup on
+initialization and queue removal expires payloads and deletes orphan records.
+Capture and payload reads also enforce retention before accepting or reusing bytes.
+The quota is a cap, not automatic eviction of another pending job. Clearing the
+extension's data destroys its reconciliation keys. Do not do that to retry a save.
 
-Add a visible `needs_review` queue state (or equally explicit outcome field), with
-text such as “Zotero may already contain this item; check before retrying.” Ordinary
-“Retry Failed” must skip partial/uncertain writes unless the user explicitly chooses
-a recovery action. Preserve the attempt history across retries.
+## Queue lifecycle and trust boundaries
 
-The engine must re-read the **current** runtime and attempt generation before
-applying any asynchronous result. Stop/remove must invalidate the active generation
-and signal cancellation; a late completion must not overwrite a cancelled item or
-advance a different queue run. Cancelling a request does not undo Zotero writes.
-Pause should stop starting new items while allowing the current committed save
-sequence to settle. Document that distinction in the UI.
+Queue item states are `pending`, `opening_tab`, `saving_snapshot`, `archived`,
+`failed`, `cancelled`, and `needs_review`; runtime states are idle/running/paused.
+The provider's warnings and review outcomes survive orchestration and normalization.
 
-A watchdog must supervise capture/save deadlines separately from page-load timeout.
-Its work cannot sit behind a never-settling provider promise in the existing queue
-promise chain. Use finite provider deadlines and checkpoint-driven recovery.
+Pause prevents new work and lets an executing save settle. Stop/remove/clear
+invalidate the engine generation and abort active requests. The provider checks
+cancellation before writes; the engine checks the current generation, active item,
+tab and status before applying any result. A late completion cannot advance another
+run or turn a stopped item into archived. Abort does not undo remote side effects;
+Retry / Reconcile uses the durable job. Review outcomes are not included in bulk retry.
 
-## 8. Permissions, trust boundaries and diagnostics
+A four-minute save deadline bounds the provider wait independently of the page-load
+timeout. The watchdog can signal cancellation without waiting behind the provider
+promise. Pacing uses both a short timer and an alarm, and the worker recovers queue
+state on activation as well as browser startup.
 
-Request `http://127.0.0.1/*` through the panel's Start/Connect user gesture, separately
-from queued-site permissions. The existing optional `http://*/*` declaration already
-permits that request; there is no need to add broad required host access. The host
-grant is broader than the intended endpoint, so the HTTP client must enforce port
-23119 and its endpoint allowlist itself.
+Only messages from the exact Archivist panel URL and extension ID reach privileged
+command routing. A page content script cannot invoke Start, authorize, choose an API
+path, or fetch through the extension. Capture is pulled by the worker from a fixed
+document rather than accepting page-supplied progress messages.
 
-Prefer extension-context `fetch` with explicit deadlines and `redirect: "error"`.
-Content scripts remain subject to page-origin network restrictions even when the
-extension holds host permissions. See [Chrome network requests][chrome-network].
+## Verification and remaining limits
 
-New capture/progress/resource messages require sender validation before routing:
-check extension ID, actual `sender.tab.id`, frame/document identity and the active
-attempt/generation. Content messages cannot choose arbitrary Zotero endpoints or
-start new library writes. Panel controls must be accepted only from the expected
-extension UI context. Currently `service-worker.js` discards `_sender`, so adding
-only payload schemas to `message-router.js` is insufficient.
+`npm test` covers API headers, server binding, rejected endpoints/redirect policy,
+empty responses, per-object errors, lost write responses, cancellation, conflicting
+items, expired payloads, chunk/document validation, and queue/panel/storage behavior.
+The prior iframe tests were replaced with local-provider tests.
 
-Replace the Connector-specific diagnostics model with local-provider fields such
-as `permissionGranted`, `reachable`, `clientVersion`, `apiVersion`,
-`protocolSupported`, `targetWritable`, `targetFilesWritable`, `captureReady`,
-`lastError`, and `updatedAt`. Missing permission, stopped Zotero, unsupported
-protocol, capture failure, partial save and uncertain save need different messages.
-Do not retain red “Connector extension”/“Bridge” indicators for a provider that uses
-neither. The three primary statuses can become Local access, Zotero, and Save target.
+`tests/integration/local-zotero.mjs` uses a separate Chromium profile and disposable
+Zotero profile, with no browser Connector. It archives a public and cookie-protected
+fixture, checks the resulting HTML files for live DOM/Unicode content and embedded
+assets, and renders both offline to verify text, CSS and images. A test-only copy
+points at port 23129; production remains fixed at 23119. The test uses a preseeded
+key belonging only to that disposable profile; interactive consent remains the
+user's Connect step in normal installation.
 
-## 9. Repository changes needed for implementation
-
-| Area | Proposed change |
-| --- | --- |
-| `zotero/local-client.js` (new) | Fixed-origin HTTP transport, headers, status/body parsing, version checks, timeouts and error classification |
-| `zotero/provider-local.js` (new) | Health/preflight and checkpointed parent/attachment save sequence |
-| `background/snapshot-capture.js`, `content/snapshot.js` (new) | Authorized capture lifecycle, pinned engine adapter, document checks, chunks and resource fetches |
-| `background/save-job-repo.js` (new) | Temporary IndexedDB payloads and durable write-intent/receipt records |
-| `zotero/provider-interface.js` | Structured outcomes and provider-neutral diagnostics |
-| `background/provider-orchestrator.js` | Select `local_zotero`, pass attempt identity, preserve detailed results instead of collapsing them to `{ok:true}` |
-| `shared/protocol.js`, `shared/state.js` | Provider mode, new message contracts, attempt/outcome fields and migrations; current normalizers discard unknown fields |
-| `background/storage-repo.js` | Migrate existing queue/diagnostics and reconcile metadata with job receipts |
-| `background/queue-engine.js`, `queue-lifecycle.js` | Resume by phase, cancellation generation checks, save watchdog, partial/uncertain retry behavior |
-| `background/service-worker.js`, `message-router.js` | Validate senders and dispatch capture/permission/job messages |
-| `sidepanel/` | Local permission gesture, diagnostics, destination label, partial/needs-review states and recovery controls |
-| `manifest.json`, dependency metadata | Only changes required by the selected packaged capture engine; optional offscreen permission if validated necessary |
-| `README.md`, tests | Update prerequisites and usage only when the provider actually ships; add real browser/Desktop coverage |
-
-Migrate old active `opening_tab`/`saving_snapshot` records conservatively on upgrade.
-Do not resume a stale Connector attempt as a fresh local write. Preserve pending
-URLs, selectors, pacing and selection. Until migration and tests are ready, the
-legacy provider remains the implemented runtime; the design does not silently
-switch it.
-
-## 10. Implementation sequence
-
-1. **Protocol client and disposable-library smoke test.** Prove ping, target checks,
-   parent creation and HTML attachment import on 10.0.6; test empty 201 bodies and
-   the 200-without-file case. Use a synthetic self-contained HTML payload first.
-2. **Capture proof of concept.** Select the dependency/license approach, package the
-   engine, implement on-demand capture and bounded transfers. Validate actual
-   offline-readable HTML, authenticated content, frames, assets and background tabs.
-3. **Durable jobs and lifecycle changes.** Add checkpoints, outcomes, cancellation,
-   cleanup and restart behavior before enabling writes through the normal queue.
-4. **Provider/UI integration and migration.** Add local access, diagnostics and
-   recovery controls; update installation documentation and run full regression tests.
-
-Do not declare the feature complete after a successful localhost POST. Acceptance
-requires a parent **and a usable snapshot**, accurate outcome reporting, and safe
-behavior when any boundary is interrupted.
-
-## 11. Alternative: Zotero 10's authenticated local API
-
-Zotero 10.0.6 also implements `/api/`, including writes and file uploads. It is a
-separate design option with explicit library paths, durable item keys and readback.
-The running instance returned **403 `Local API is not enabled`**; this investigation
-did not enable it or request credentials. See [local API implementation][local-api].
-
-For an explicitly Zotero-10-only provider needing unattended recovery, evaluate
-this route before committing to the Connector API's uncertain-write limitations:
-
-1. Enable local API access in Zotero. Read `/api/` and retain the
-   `Zotero-Server-ID` and API version. Browser-origin requests also need the server's
-   accepted request header; validate the exact extension request path in the spike.
-2. Request local authorization via `POST /api/local/authorize` with
-   `{"appName":"Webpage Archivist"}` and the required server-ID header. Zotero shows
-   its own consent dialog. Write requests use a local `Zotero-API-Key` and
-   `Zotero-Server-ID`; these keys are unrelated to zotero.org keys. One-time access
-   is consumed by a write; handle 401 without silently starting an authorization loop.
-3. Persist generated valid parent/attachment keys before creation. POST item JSON to
-   `/api/users/0/items` (or the chosen group path), using `version: 0` for new keyed
-   items. Inspect `successful`/`failed` entries even when the batch HTTP status is
-   200. Read by key to reconcile an interrupted create; never overwrite a mismatched
-   existing object merely because its key exists.
-4. Create an `imported_url` HTML attachment with `parentItem` referring to the parent
-   key. File upload is three-phase: authorize via `POST .../items/<key>/file` with
-   form-encoded MD5, filename, size, millisecond mtime and precondition headers;
-   POST bytes to the returned loopback upload URL; then register the upload key
-   at the attachment's `/file` endpoint. Registration returns 204. Honor existing
-   file/version preconditions and verify file contents/metadata during recovery.
-5. Bind receipts, credentials and object versions to the server ID. A changed
-   Zotero instance must not inherit another database's save/recovery state.
-
-This adds settings, authorization, credential handling, destination selection and
-more HTTP operations. It offers stronger reconciliation than opaque Connector
-sessions, but still needs durable jobs and file-upload crash tests. It shares the
-same browser capture requirements. Do not combine the two protocols opportunistically
-inside one attempt or silently fall back between them after a write failure.
-
-## 12. Validation and open decisions
-
-Completed investigation checks:
-
-- Running Desktop ping: 200, Zotero 10.0.6, Connector API 3; POST ping preferences
-  include `supportsAttachmentUpload`.
-- Destination read: 200, item/file editing allowed. Names/tags were not added to
-  this document or application storage.
-- Empty `saveSingleFile` request: 400 `SESSION_ID_NOT_PROVIDED`, before any mutation.
-- `sessionProgress`: 404. `/api/`: 403, disabled.
-- Source review of parent/attachment handlers, sessions, snapshot file import,
-  Connector capture/message code, local API writes, and upstream tests asserting
-  parent membership and saved HTML bytes.
-
-Required automated tests:
-
-- HTTP contract: headers, timeouts, redirects, unexpected service/version, invalid
-  JSON, empty 201, 200 files-not-editable, 409 session-exists, missing session and 5xx.
-- Capture: document changes, cross-origin permissions, absent resources, deadlines,
-  unsupported MIME, UTF-8/chunk boundaries, limits, malformed/duplicate chunks,
-  sender mismatch and cleanup.
-- Jobs: restart at every pre/post-write boundary, lost response, failed local receipt
-  persistence, Zotero restart, stale generation, stop/pause/remove, late responses,
-  abandoned payloads, partial outcomes and exclusion from ordinary retry.
-- Migration/normalization: retain new fields, preserve existing selections/settings,
-  migrate diagnostics and prevent stale bridge jobs from creating new local items.
-
-Required integration tests use an isolated Chromium profile and disposable Zotero
-profile/library, with the official browser Connector **disabled or absent**. Test
-one public HTML page and one authenticated/dynamic fixture; verify the parent,
-exactly one imported attachment, saved content and offline asset rendering. Include
-multiple destinations, a files-read-only library, redirects, large pages, real
-worker suspension and a closed side panel. Do not use someone's real library as
-the retry/crash test fixture. The existing 104 passing module tests do not cover
-these integration properties.
-
-Open decisions before shipping:
-
-- Snapshot engine revision, packaging/license approach and required browser hooks.
-- Resource/frame coverage, capture-quality rules and validated size/time limits.
-- Whether conservative manual review is acceptable, or the `/api/` design is needed
-  for stronger recovery and explicit destinations from the first release.
-- Whether measured upload duration requires an offscreen document.
-- Exact supported Zotero versions; 10.0.6 is the investigated baseline, not a claim
-  of compatibility with every API-3 application.
-
-## 13. Sources and reproduction
-
-The upstream links below are pinned to the inspected releases where possible.
-The local repositories used were:
-
-- `/home/arjan/Projects/Browser-extensions/zotero-connectors`
-- `/mnt/hdd1/Cache22/github.com/zotero/zotero/zotero.git` (bare)
-
-Reproduce source inspection without checking out or modifying Zotero:
-
-```sh
-git --git-dir=/mnt/hdd1/Cache22/github.com/zotero/zotero/zotero.git \
-  show 10.0.6:chrome/content/zotero/xpcom/server/server_connector.js
-git --git-dir=/mnt/hdd1/Cache22/github.com/zotero/zotero/zotero.git \
-  show 10.0.6:chrome/content/zotero/xpcom/server/saveSession.js
-git --git-dir=/mnt/hdd1/Cache22/github.com/zotero/zotero/zotero.git \
-  show 10.0.6:chrome/content/zotero/xpcom/server/server_localAPI.js
-```
-
-[bridge-removal]: https://github.com/zotero/zotero-connectors/commit/7f618c21e4f57baebfb0dd209db33b267ef7b159
-[server-connector]: https://github.com/zotero/zotero/blob/536244c2771f590abab9c09a3c27e615e0b318ff/chrome/content/zotero/xpcom/server/server_connector.js
-[save-session]: https://github.com/zotero/zotero/blob/536244c2771f590abab9c09a3c27e615e0b318ff/chrome/content/zotero/xpcom/server/saveSession.js
-[server]: https://github.com/zotero/zotero/blob/536244c2771f590abab9c09a3c27e615e0b318ff/chrome/content/zotero/xpcom/server/server.js
-[connector-tests]: https://github.com/zotero/zotero/blob/536244c2771f590abab9c09a3c27e615e0b318ff/test/tests/server_connectorTest.js
-[singlefile-adapter]: https://github.com/zotero/zotero-connectors/blob/ce29dfa360d1ce17a3a1f15a9d338d638a073106/src/common/singlefile.js
-[local-api]: https://github.com/zotero/zotero/blob/536244c2771f590abab9c09a3c27e615e0b318ff/chrome/content/zotero/xpcom/server/server_localAPI.js
-[http-server-docs]: https://www.zotero.org/support/dev/client_coding/connector_http_server
-[singlefile-core]: https://github.com/gildas-lormeau/single-file-core
-[page-capture]: https://developer.chrome.com/docs/extensions/reference/api/pageCapture
-[chrome-messaging]: https://developer.chrome.com/docs/extensions/develop/concepts/messaging
-[chrome-lifecycle]: https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle
-[chrome-offscreen]: https://developer.chrome.com/docs/extensions/reference/api/offscreen
-[chrome-network]: https://developer.chrome.com/docs/extensions/develop/concepts/network-requests
+Group write restrictions, complex frames/media and hard process termination during
+Zotero file registration need broader integration coverage. An offscreen upload
+context is not currently used; large or slow local requests fail at the explicit
+deadline and can be reconciled on retry. No compatibility fallback to the Connector
+or the cloud API is provided.

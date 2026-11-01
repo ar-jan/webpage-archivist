@@ -11,7 +11,7 @@ import {
   createQueueItemId,
   normalizeCollectedLinks
 } from "../shared/state.js";
-import { routeMessage } from "./message-router.js";
+import { routeMessage, isPanelSender } from "./message-router.js";
 import { createProviderOrchestrator } from "./provider-orchestrator.js";
 import { createQueueEngine, QUEUE_ENGINE_ALARM_NAME } from "./queue-engine.js";
 import { createQueueLifecycleHandlers } from "./queue-lifecycle.js";
@@ -88,7 +88,11 @@ chrome.runtime.onStartup.addListener(() => {
   void initializeExtensionState();
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!isPanelSender(sender, chrome.runtime)) {
+    sendResponse(createError(ERROR_CODES.BAD_REQUEST, "Only the Archivist panel can issue commands."));
+    return false;
+  }
   handleMessage(message)
     .then((result) => sendResponse(result))
     .catch((error) => {
@@ -116,6 +120,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 async function initializeExtensionState() {
+  await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
   await Promise.all([
     ensureCollectorSettings(),
     ensureQueueSettings(),
@@ -124,13 +129,28 @@ async function initializeExtensionState() {
     ensureQueueRuntime(),
     ensureProviderDiagnostics()
   ]);
+  await providerOrchestrator.jobs.cleanup((await getQueueItems()).map(item => item.id));
   await configureSidePanelBehavior();
   await providerOrchestrator.refreshProviderDiagnostics();
   await queueEngine.recoverQueueEngineState();
 }
 
 async function handleMessage(message) {
-  return routeMessage(message, messageHandlers);
+  if ([MESSAGE_TYPES.START_QUEUE, MESSAGE_TYPES.RESUME_QUEUE].includes(message?.type)) {
+    const diagnostics = await providerOrchestrator.refreshProviderDiagnostics();
+    if (!diagnostics.permissionGranted || !diagnostics.reachable || !diagnostics.authorized) {
+      return createError(ERROR_CODES.PROVIDER_UNAVAILABLE, diagnostics.lastError);
+    }
+    // Existing jobs validate their pinned destination. A changed panel selection
+    // must not prevent reconciliation; new jobs preflight the current selection.
+  }
+  const result = await routeMessage(message, messageHandlers);
+  if ([MESSAGE_TYPES.CLEAR_QUEUE, MESSAGE_TYPES.CLEAR_ARCHIVED_QUEUE, MESSAGE_TYPES.REMOVE_QUEUE_ITEM].includes(message?.type) && result.ok) {
+    // Wait for cancelled work before deleting its local receipts/payloads.
+    await queueEngine.waitForIdle();
+    await providerOrchestrator.jobs.cleanup((await getQueueItems()).map(item => item.id));
+  }
+  return result;
 }
 
 async function configureSidePanelBehavior() {
@@ -330,3 +350,6 @@ async function getActiveTab() {
 
   return tabs[0] ?? null;
 }
+
+void chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
+void queueEngine.recoverQueueEngineState();

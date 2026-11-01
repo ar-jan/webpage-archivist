@@ -85,9 +85,9 @@ test("storage repo initializes provider diagnostics defaults when missing", asyn
 
   const diagnostics = await getProviderDiagnostics();
 
-  assert.equal(diagnostics.connectorBridge.enabled, true);
-  assert.equal(diagnostics.connectorBridge.healthy, false);
-  assert.equal(diagnostics.connectorBridge.bridgeReady, null);
+  assert.equal(diagnostics.activeMode, "local_zotero");
+  assert.equal(diagnostics.permissionGranted, false);
+  assert.equal(diagnostics.reachable, false);
   assert.equal(chromeMock.writes.length, 1);
   assert.equal(Boolean(chromeMock.storageState[STORAGE_KEYS.PROVIDER_DIAGNOSTICS]), true);
 });
@@ -95,13 +95,9 @@ test("storage repo initializes provider diagnostics defaults when missing", asyn
 test("storage repo normalizes malformed provider diagnostics and writes back", async (t) => {
   const chromeMock = installStorageChromeMock({
     [STORAGE_KEYS.PROVIDER_DIAGNOSTICS]: {
-      connectorBridge: {
-        enabled: false,
-        healthy: "yes",
-        bridgeReady: "sometimes",
-        connectorAvailable: "maybe",
-        zoteroOnline: false
-      },
+      permissionGranted: "yes",
+      reachable: "maybe",
+      authorized: false,
       lastError: "",
       updatedAt: -1
     }
@@ -110,11 +106,11 @@ test("storage repo normalizes malformed provider diagnostics and writes back", a
 
   const diagnostics = await getProviderDiagnostics();
 
-  assert.equal(diagnostics.connectorBridge.enabled, true);
-  assert.equal(diagnostics.connectorBridge.healthy, false);
-  assert.equal(diagnostics.connectorBridge.bridgeReady, null);
-  assert.equal(diagnostics.connectorBridge.connectorAvailable, null);
-  assert.equal(diagnostics.connectorBridge.zoteroOnline, false);
+  assert.equal(diagnostics.activeMode, "local_zotero");
+  assert.equal(diagnostics.permissionGranted, false);
+  assert.equal(diagnostics.reachable, false);
+  assert.equal(diagnostics.authorized, false);
+  assert.equal(diagnostics.destinationReady, false);
   assert.equal(chromeMock.writes.length, 1);
 });
 
@@ -153,27 +149,6 @@ test("storage repo keeps all anchor links rule at the top", async (t) => {
 
   assert.equal(rules[0].id, "anchors");
   assert.equal(rules[1].id, "substack-posts");
-  assert.equal(chromeMock.writes.length, 1);
-});
-
-test("storage repo migrates legacy anchor-only selector defaults", async (t) => {
-  const chromeMock = installStorageChromeMock({
-    [STORAGE_KEYS.SELECTOR_RULES]: [
-      {
-        id: "anchors",
-        name: "All anchor links",
-        cssSelector: "a[href]",
-        urlAttribute: "href",
-        enabled: true
-      }
-    ]
-  });
-  t.after(() => chromeMock.restore());
-
-  const rules = await getSelectorRules();
-
-  assert.equal(rules.length, DEFAULT_SELECTOR_RULES.length);
-  assert.equal(rules[0].id, DEFAULT_SELECTOR_RULES[0].id);
   assert.equal(chromeMock.writes.length, 1);
 });
 

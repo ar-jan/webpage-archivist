@@ -6,7 +6,7 @@
 - `sidepanel/`: panel UI (`panel.html/css/js`) plus focused controllers and store/render modules.
 - `content/collector.js`: on-demand page link collection logic.
 - `shared/`: cross-surface contracts and state normalization utilities.
-- `zotero/`: provider interface and connector bridge implementation.
+- `zotero/`: authenticated local Zotero API client, settings, and provider.
 - `tests/`: module-level `node:test` suites and `tests/test-helpers/` mocks.
 - `docs/`: architecture and design notes for extension behavior and constraints.
 
@@ -14,7 +14,8 @@
 - `npm install`: install local Node dependencies.
 - `npm test`: run all tests (`node --test tests/*.mjs`).
 - `npm run test:watch`: rerun tests on file changes.
-- No bundling/build step is configured. For manual validation, load the repo root in Chromium via `chrome://extensions` -> **Developer mode** -> **Load unpacked**.
+- `npm run build`: package the pinned snapshot/checksum dependencies before loading the extension.
+- For manual validation, load the repo root in Chromium via `chrome://extensions` -> **Developer mode** -> **Load unpacked**.
 
 ## Coding Style & Naming Conventions
 - Language/runtime: modern JavaScript ES modules (`import`/`export`), MV3 service worker.
@@ -26,7 +27,7 @@
 ## Testing Guidelines
 - Framework: Node built-in `node:test` with `node:assert/strict`.
 - Test files: `tests/*.test.mjs` (one module/feature area per file).
-- Prefer deterministic mocks from `tests/test-helpers/` for Chrome/Zotero bridge behaviors.
+- Prefer deterministic mocks from `tests/test-helpers/` for Chrome/Zotero API behaviors.
 - When changing queue, routing, or provider code, add/adjust tests for state transitions, message contracts, and failure paths.
 - Run `npm test` before opening a PR.
 

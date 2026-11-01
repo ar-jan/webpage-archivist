@@ -105,3 +105,8 @@ function validateMessagePayload(message) {
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
+
+export function isPanelSender(sender, runtime) {
+  return sender?.id === runtime.id
+    && sender.url === runtime.getURL("sidepanel/panel.html");
+}

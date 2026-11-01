@@ -3,6 +3,18 @@
   "private": true,
   "scripts": {
     "test": "node --test tests/*.mjs",
-    "test:watch": "node --test --watch tests/*.mjs"
-  }
+    "test:watch": "node --test --watch tests/*.mjs",
+    "build": "node scripts/build.mjs",
+    "pretest": "npm run build"
+  },
+  "dependencies": {
+    "single-file-core": "1.8.0",
+    "spark-md5": "3.0.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "fake-indexeddb": "6.2.7",
+    "playwright-core": "1.64.1"
+  },
+  "type": "module"
 }

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { routeMessage } from "../background/message-router.js";
+import { routeMessage, isPanelSender } from "../background/message-router.js";
 import { MESSAGE_TYPES } from "../shared/protocol.js";
 
 test("message router rejects missing message type", async () => {
@@ -235,4 +235,14 @@ test("message router validates object payload contracts", async () => {
   );
 
   assert.equal(validResponse.ok, true);
+});
+
+test("privileged commands accept only the extension panel, never page content scripts", () => {
+  const runtime = { id: "archivist", getURL: path => `chrome-extension://archivist/${path}` };
+  const sender = { id: "archivist", url: runtime.getURL("sidepanel/panel.html") };
+  assert.equal(isPanelSender(sender, runtime), true);
+  assert.equal(isPanelSender({ ...sender, tab: { id: 1 } }, runtime), true);
+  assert.equal(isPanelSender({ ...sender, tab: { id: 1 }, url: "https://example.org/" }, runtime), false);
+  assert.equal(isPanelSender({ ...sender, id: "another-extension" }, runtime), false);
+  assert.equal(isPanelSender({ ...sender, url: "https://example.org" }, runtime), false);
 });
