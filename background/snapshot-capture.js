@@ -16,7 +16,7 @@ export async function captureSnapshot({ tabId, captureId, signal, chromeImpl = g
       return await chromeImpl.scripting.executeScript({ target: { tabId, frameIds: [0] }, world, files: [file] });
     } catch (error) {
       if (/Could not load file/i.test(error.message)) {
-        throw new Error(`Snapshot build file is missing (${file}). Run npm ci and npm run build in the source checkout, load its dist folder, then reload Archivist.`);
+        throw new Error(`Snapshot runtime file is missing (${file}). Restore the complete repository checkout, load its root folder, then reload Archivist.`);
       }
       throw error;
     }

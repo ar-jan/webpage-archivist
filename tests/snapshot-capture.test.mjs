@@ -32,7 +32,7 @@ test("capture rejects a changed document and missing permission after a redirect
   await assert.rejects(captureSnapshot({ tabId: 1, captureId: "test", chromeImpl: denied.chromeImpl }), error => error.permissionUrl === "https://example.org/final" && /grant access/.test(error.message));
 });
 
-test("missing capture bundles explain how to build; permission failures keep their cause", async () => {
+test("missing capture bundles explain how to restore the checkout; permission failures keep their cause", async () => {
   for (const missing of ["vendor/single-file-hooks.js", "content/snapshot.bundle.js"]) {
     const h = mockCapture();
     const execute = h.chromeImpl.scripting.executeScript;
@@ -41,7 +41,7 @@ test("missing capture bundles explain how to build; permission failures keep the
       return execute(request);
     };
     await assert.rejects(captureSnapshot({ tabId: 1, captureId: "test", chromeImpl: h.chromeImpl }), error =>
-      error.message.includes(missing) && /npm ci and npm run build/.test(error.message));
+      error.message.includes(missing) && /Restore the complete repository checkout/.test(error.message));
   }
   const h = mockCapture();
   h.chromeImpl.scripting.executeScript = async () => { throw new Error("Cannot access contents of the page."); };

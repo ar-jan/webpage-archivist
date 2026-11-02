@@ -29,7 +29,7 @@ if (!globalThis.archivistCapture) {
       let resourceFailures = 0;
       let resourceBytes = 0;
       const data = await getPageData({
-        removeScripts: true, removeFrames: true, removeHiddenElements: false,
+        blockScripts: true, removeFrames: true, removeHiddenElements: false,
         removeUnusedStyles: false, removeUnusedFonts: false, compressHTML: false,
         loadDeferredContent: true, loadDeferredContentMaxIdleTime: 1000,
         loadDeferredContentMaxIdleTimeDelay: 2000,

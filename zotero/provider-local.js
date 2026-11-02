@@ -1,4 +1,4 @@
-import SparkMD5 from "spark-md5";
+import SparkMD5 from "../vendor/md5.js";
 import { createLocalClient, LocalAPIError, LOCAL_ORIGIN, validateDestination } from "./local-client.js";
 import { getLocalSettings } from "./local-settings.js";
 import { createSaveJobRepo } from "../background/save-job-repo.js";

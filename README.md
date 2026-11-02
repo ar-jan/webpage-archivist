@@ -8,16 +8,11 @@ is not required.
 
 1. Use Zotero 10 with its local API enabled. The implementation was investigated
    against 10.0.6 and tested end to end against 10.0.7.
-2. Install Node.js 24+, clone this repository, and run:
-
-   ```sh
-   npm ci
-   npm run build
-   ```
-
+2. Clone this repository. Node.js, npm, and a build are **not required** to install
+   or update the extension: the browser-ready dependencies are checked in.
 3. Open Chromium's `chrome://extensions`, enable **Developer mode**, and **Load
-   unpacked** and select this repository's **`dist/` directory**. After updating,
-   rebuild and click **Reload** on the extension. Chromium 120+ is required.
+   unpacked** and select the **repository root** (the directory containing
+   `manifest.json`). Chromium 120+ is required.
 4. Open Archivist's side panel, click **Connect Zotero**, grant local access, and
    choose **Always Allow** in Zotero's authorization dialog. Keep the panel open
    until the connection finishes. One-time authorization cannot complete a save,
@@ -25,11 +20,15 @@ is not required.
 5. Choose a library or collection in **Save to**. New items use that destination;
    retries retain the destination selected when the save began.
 
-`dist/` is the complete extension: the worker includes its checksum dependency,
-and the snapshot bundles, source and license notices are present. The source
-checkout itself is not loadable. Switching an existing unpacked installation from
-the repository root to `dist/` creates a separate extension identity; configure
-its rules and connect to Zotero again. No old extension state is migrated.
+To update, run `git pull` in the same checkout, then click **Reload** for Archivist
+in `chrome://extensions`. There is no install/build command between those steps.
+Keep the checkout at the same path so the unpacked extension retains its identity
+and stored settings. Keep generated files unmodified so pulls can update them.
+
+If you previously loaded `dist/`, switch once to loading the repository root.
+This changes the unpacked extension identity: configure its rules and connect to
+Zotero again. No old extension state is migrated. The old `dist/` installation no
+longer receives updates; disable or remove it after switching.
 
 ## Archive pages
 
@@ -76,13 +75,27 @@ to captured pages or zotero.org.
 
 ## Development and verification
 
+Contributors need Node.js 24+ and `npm ci`. Normal application modules run directly
+from the checkout. After changing `content/snapshot.js`, the build script, or the
+pinned dependencies, run `npm run build` and commit the resulting `vendor/` and
+`content/snapshot.bundle.js*` changes together with the source/lockfile changes.
+`vendor/` is generated; do not edit its files by hand.
+
 ```sh
-npm test                    # builds dist, tests modules and a clean-source rebuild
+npm ci
+npm run build               # regenerate committed assets only when their inputs change
+npm run check:assets        # compare against a fresh build without changing the checkout
+npm test                    # check assets, test modules and clean-source reproducibility
 npm run test:watch
 node tests/integration/selector-rules.mjs  # isolated Chromium selector/collection test
-node tests/integration/worker-startup.mjs  # complete package registration/reload
+node tests/integration/worker-startup.mjs  # checkout startup/reload, capture and checksum
 node tests/integration/panel-startup.mjs  # delayed initialization and offline readiness
 ```
+
+CI checks the committed assets before testing, without rebuilding them in place,
+so missing or stale bundles fail instead of being silently repaired. It also tests
+Chromium startup, reload with retained storage, and snapshot capture from a copy
+of the checkout without `node_modules` or `dist`.
 
 The opt-in real-browser test uses a **disposable** Zotero profile with its own data
 directory, local API on port 23129, and a test-only authorization key. It refuses
@@ -93,7 +106,8 @@ ARCHIVIST_TEST_ZOTERO_PROFILE=/tmp/archivist-zotero-test-EXAMPLE/profile \
   node tests/integration/local-zotero.mjs
 ```
 
-These browser tests load a copy of `dist/`; run the build first. Set
+These browser tests load a copy of the repository's runtime files, with no build
+step. Set
 `ARCHIVIST_TEST_CHROMIUM=/usr/bin/brave-browser` to exercise Brave.
 
 The Zotero test creates a separate browser profile and a test copy targeting the

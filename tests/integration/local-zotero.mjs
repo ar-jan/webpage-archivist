@@ -1,24 +1,22 @@
 // Opt-in integration test. Requires a disposable Zotero profile with local API
 // enabled on port 23129 and its test-only localAPIKeys.json. Never use a real profile.
 import { chromium } from "playwright-core";
-import { mkdtemp, cp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import http from "node:http";
 import assert from "node:assert/strict";
+import { copyExtension } from "../test-helpers/extension-copy.mjs";
 
 const profile = process.env.ARCHIVIST_TEST_ZOTERO_PROFILE;
 assert.ok(profile && path.resolve(profile).startsWith(path.join(tmpdir(), "archivist-zotero-test-")), "Provide a disposable /tmp/archivist-zotero-test-*/profile only");
 const testKey = JSON.parse(await readFile(path.join(profile, "localAPIKeys.json"), "utf8")).keys[0].key;
 const root = await mkdtemp(path.join(tmpdir(), "archivist-chromium-test-"));
 const extension = path.join(root, "extension");
-await cp("dist", extension, { recursive: true });
-await cp("background/save-job-repo.js", path.join(extension, "background/save-job-repo.js"));
+await copyExtension(extension);
 // Test-only copy binds every API request to the disposable server.
-for (const file of ["zotero/local-client.js", "background/service-worker.js"]) {
-  const target = path.join(extension, file);
-  await writeFile(target, (await readFile(target, "utf8")).replaceAll("23119", "23129"));
-}
+const clientPath = path.join(extension, "zotero/local-client.js");
+await writeFile(clientPath, (await readFile(clientPath, "utf8")).replaceAll("23119", "23129"));
 const manifestPath = path.join(extension, "manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 manifest.host_permissions = ["http://127.0.0.1/*"];

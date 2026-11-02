@@ -12,10 +12,12 @@
 
 ## Build, Test, and Development Commands
 - `npm install`: install local Node dependencies.
-- `npm test`: run all tests (`node --test tests/*.mjs`).
+- `npm test`: check committed runtime assets, then run all tests (`node --test tests/*.mjs`).
 - `npm run test:watch`: rerun tests on file changes.
-- `npm run build`: package the pinned snapshot/checksum dependencies before loading the extension.
-- For manual validation, build first and load `dist/` in Chromium via `chrome://extensions` -> **Developer mode** -> **Load unpacked**. The source root is not loadable.
+- `npm run build`: regenerate committed snapshot/checksum bundles and upstream source/notices after changing their inputs; commit those outputs with the source changes.
+- `npm run check:assets`: verify committed assets against a temporary fresh build without modifying the checkout.
+- For manual validation, load the repository root in Chromium via `chrome://extensions` -> **Developer mode** -> **Load unpacked**. Installation needs no npm/build step; updates are `git pull` then **Reload**, using the same checkout path.
+- `vendor/` and `content/snapshot.bundle.js*` are generated and tracked. Do not edit them by hand or rebuild them automatically before freshness checks.
 
 ## Coding Style & Naming Conventions
 - Language/runtime: modern JavaScript ES modules (`import`/`export`), MV3 service worker.

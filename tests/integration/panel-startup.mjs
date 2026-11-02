@@ -1,12 +1,13 @@
 import { chromium } from "playwright-core";
-import { cp, mkdtemp } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { copyExtension } from "../test-helpers/extension-copy.mjs";
 
 const root = await mkdtemp(path.join(tmpdir(), "archivist-panel-startup-"));
 const extension = path.join(root, "extension");
-await cp("dist", extension, { recursive: true });
+await copyExtension(extension);
 const context = await chromium.launchPersistentContext(path.join(root, "browser"), {
   executablePath: process.env.ARCHIVIST_TEST_CHROMIUM || "/usr/bin/chromium", headless: true,
   args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]

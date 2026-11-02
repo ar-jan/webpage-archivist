@@ -1,6 +1,4 @@
 node_modules/
 dist/
 .dist-build-*/
-vendor/
-content/snapshot.bundle.js
-content/snapshot.bundle.js.LEGAL.txt
+.runtime-build-*/

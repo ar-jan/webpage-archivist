@@ -1,0 +1,1673 @@
+/*
+ * Copyright 2010-2022 Gildas Lormeau
+ * contact : gildas.lormeau <at> gmail.com
+ * 
+ * This file is part of SingleFile.
+ *
+ *   The code in this file is free software: you can redistribute it and/or 
+ *   modify it under the terms of the GNU Affero General Public License 
+ *   (GNU AGPL) as published by the Free Software Foundation, either version 3
+ *   of the License, or (at your option) any later version.
+ * 
+ *   The code in this file is distributed in the hope that it will be useful, 
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of 
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero 
+ *   General Public License for more details.
+ *
+ *   As additional permission under GNU AGPL version 3 section 7, you may 
+ *   distribute UNMODIFIED VERSIONS OF THIS file without the copy of the GNU 
+ *   AGPL normally required by section 4, provided you include this license 
+ *   notice and a URL through which recipients can access the Corresponding 
+ *   Source.
+ */
+
+import * as cssUnescape from "./../vendor/css-unescape.js";
+import * as srcsetParser from "./../vendor/html-srcset-parser.js";
+import * as sha from "./lib/sha.js";
+import * as hooksFrames from "./../processors/hooks/content/content-hooks-frames.js";
+import * as infobar from "./infobar.js";
+import {
+	SINGLE_FILE_PREFIX,
+	COMMENT_HEADER,
+	WAIT_FOR_USERSCRIPT_PROPERTY_NAME,
+	MESSAGE_PREFIX,
+	NO_SCRIPT_PROPERTY_NAME
+} from "./constants.js";
+import {
+	getValidFilename,
+	DEFAULT_REPLACED_CHARACTERS,
+	DEFAULT_REPLACEMENT_CHARACTER,
+	DEFAULT_REPLACEMENT_CHARACTERS
+} from "./filename.js";
+
+const ON_BEFORE_CAPTURE_EVENT_NAME = SINGLE_FILE_PREFIX + "on-before-capture";
+const ON_AFTER_CAPTURE_EVENT_NAME = SINGLE_FILE_PREFIX + "on-after-capture";
+const GET_ADOPTED_STYLESHEETS_REQUEST_EVENT = SINGLE_FILE_PREFIX + "request-get-adopted-stylesheets";
+const GET_ADOPTED_STYLESHEETS_RESPONSE_EVENT = SINGLE_FILE_PREFIX + "response-get-adopted-stylesheets";
+const UNREGISTER_GET_ADOPTED_STYLESHEETS_REQUEST_EVENT = SINGLE_FILE_PREFIX + "unregister-request-get-adopted-stylesheets";
+const CLEAR_ADOPTED_STYLESHEETS_CACHE_EVENT = SINGLE_FILE_PREFIX + "clear-adopted-stylesheets-cache";
+const ON_INIT_USERSCRIPT_EVENT = SINGLE_FILE_PREFIX + "user-script-init";
+const REMOVED_CONTENT_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "removed-content";
+const HIDDEN_CONTENT_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "hidden-content";
+const KEPT_CONTENT_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "kept-content";
+const HIDDEN_FRAME_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "hidden-frame";
+const PRESERVED_SPACE_ELEMENT_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "preserved-space-element";
+const SHADOW_ROOT_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "shadow-root-element";
+const SLOT_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "slot";
+const ASSIGNED_SLOT_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "assigned-slot";
+const ASSIGNED_SLOT_SEPARATOR = ".";
+const WIN_ID_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "win-id";
+const IMAGE_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "image";
+const POSTER_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "poster";
+const VIDEO_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "video";
+const CANVAS_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "canvas";
+const STYLE_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "movable-style";
+const INPUT_VALUE_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "input-value";
+const INPUT_CHECKED_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "input-checked";
+const LAZY_SRC_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "lazy-loaded-src";
+const STYLESHEET_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "stylesheet";
+const LINK_STYLESHEET_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "link-stylesheet";
+const DISABLED_NOSCRIPT_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "disabled-noscript";
+const SELECTED_CONTENT_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "selected-content";
+const INVALID_ELEMENT_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "invalid-element";
+const ASYNC_SCRIPT_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "async-script";
+const CUSTOM_STYLESHEET_ATTRIBUTE_NAME = "data-" + SINGLE_FILE_PREFIX + "custom-stylesheet";
+const FLOW_ELEMENTS_SELECTOR = "*:not(base):not(link):not(meta):not(noscript):not(script):not(style):not(template):not(title)";
+const KEPT_TAG_NAMES = ["NOSCRIPT", "DISABLED-NOSCRIPT", "META", "LINK", "STYLE", "TITLE", "TEMPLATE", "SOURCE", "OBJECT", "SCRIPT", "HEAD", "BODY"];
+const INVOKABLE_ELEMENTS_SELECTOR = "[popover][id], dialog[id]";
+const INVOKER_ATTRIBUTE_NAMES = ["popovertarget", "commandfor"];
+const INVOKERS_SELECTOR = INVOKER_ATTRIBUTE_NAMES.map(attributeName => "[" + attributeName + "]").join(",");
+const IGNORED_TAG_NAMES = ["SCRIPT", "NOSCRIPT", "META", "LINK", "TEMPLATE"];
+const ROOT_PSEUDO_ELEMENT_NAMES = [":before", ":after"];
+const BLOCK_CONTAINER_DISPLAY_VALUES = ["block", "flow-root", "list-item", "inline-block", "table-cell", "table-caption"];
+const BLOCK_LEVEL_DISPLAY_VALUES = ["block", "flow-root", "list-item", "flex", "grid", "table"];
+const REGEXP_SIMPLE_QUOTES_STRING = /^'(.*?)'$/;
+const REGEXP_DOUBLE_QUOTES_STRING = /^"(.*?)"$/;
+const FONT_WEIGHTS = {
+	regular: "400",
+	normal: "400",
+	bold: "700",
+	bolder: "700",
+	lighter: "100"
+};
+const FONT_STRETCHES = {
+	"ultra-condensed": "50%",
+	"extra-condensed": "62.5%",
+	"condensed": "75%",
+	"semi-condensed": "87.5%",
+	"normal": "100%",
+	"semi-expanded": "112.5%",
+	"expanded": "125%",
+	"extra-expanded": "150%",
+	"ultra-expanded": "200%"
+};
+const COMMENT_HEADER_LEGACY = "Archive processed by SingleFile";
+const ELEMENT_NODE_TYPE = 1;
+const TEXT_NODE_TYPE = 3;
+const REGEXP_QUOTED_STRING = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'/g;
+const REGEXP_GENERATED_CONTENT_IMAGE = /(url|image-set|-webkit-image-set|linear-gradient|radial-gradient|conic-gradient)\([^)]*\)/g;
+const REGEXP_BACKSLASH = /\\/;
+const REGEXP_TEXT_TRANSFORM_SEPARATOR = /\s+/;
+const MARKER_SUFFIX = ". ";
+const COUNTER_STYLE_CHARACTERS = {
+	"none": "",
+	"disc": "",
+	"circle": "",
+	"square": "",
+	"disclosure-open": "",
+	"disclosure-closed": "",
+	"decimal": "0123456789",
+	"decimal-leading-zero": "0123456789",
+	"lower-alpha": "abcdefghijklmnopqrstuvwxyz",
+	"lower-latin": "abcdefghijklmnopqrstuvwxyz",
+	"upper-alpha": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+	"upper-latin": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+	"lower-roman": "ivxlcdm",
+	"upper-roman": "IVXLCDM",
+	"lower-greek": "αβγδεζηθικλμνξοπρστυφχψω"
+};
+const REGEXP_INFINITE_FEATURE_VALUE = /(\(\s*[a-z-]+\s*(?::|<=?|>=?|=)\s*)(-?)infinity\s*\*\s*1([a-z%]+)/gi;
+const MAX_FINITE_FEATURE_VALUE = "3.40282e38";
+const FULL_WIDTH_OFFSET = 0xFEE0;
+const FULL_WIDTH_SPACE = "　";
+const SINGLE_FILE_UI_ELEMENT_CLASS = "single-file-ui-element";
+const INFOBAR_TAGNAME = infobar.INFOBAR_TAGNAME;
+const EMPTY_RESOURCE = "data:,";
+const POSTER_CONTENT_TYPES = ["image/webp", "image/jpeg"];
+const POSTER_QUALITY = 0.8;
+const NESTING_TRACK_ID_ATTRIBUTE_NAME = "data-sf-nesting-track-id";
+const NESTING_START_MARKER = NESTING_TRACK_ID_ATTRIBUTE_NAME + "-start ";
+const NESTING_END_MARKER = NESTING_TRACK_ID_ATTRIBUTE_NAME + "-end ";
+const NESTING_RECREATED_ATTRIBUTE_NAME = NESTING_TRACK_ID_ATTRIBUTE_NAME + "-recreated";
+const NESTING_SHADOW_ROOT_TRACK_ID_PREFIX = "s";
+const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
+const RAW_TEXT_TAG_NAMES = ["SCRIPT", "STYLE", "TEXTAREA", "TITLE", "XMP", "IFRAME", "NOEMBED", "NOFRAMES", "PLAINTEXT", "NOSCRIPT"];
+const COMMENT_NODE_FILTER = 128;
+const PROTECTED_OPTION_NAMES = [
+	"password",
+	"woleetKey",
+	"saveToGDrive",
+	"saveToDropbox",
+	"saveWithCompanion",
+	"forceWebAuthFlow",
+	"saveWithWebDAV",
+	"webDAVURL",
+	"webDAVUser",
+	"webDAVPassword",
+	"saveWithMCP",
+	"mcpServerUrl",
+	"mcpAuthToken",
+	"saveToGitHub",
+	"githubToken",
+	"githubUser",
+	"githubRepository",
+	"githubBranch",
+	"saveToRestFormApi",
+	"saveToRestFormApiUrl",
+	"saveToRestFormApiToken",
+	"saveToRestFormApiFileFieldName",
+	"saveToRestFormApiUrlFieldName",
+	"saveToS3",
+	"S3Domain",
+	"S3Region",
+	"S3Bucket",
+	"S3AccessKey",
+	"S3SecretKey"
+];
+const DEPRECATED_OPTION_NAMES = {
+	loadDeferredImages: "loadDeferredContent",
+	loadDeferredImagesMaxIdleTime: "loadDeferredContentMaxIdleTime",
+	loadDeferredImagesBlockCookies: "loadDeferredContentBlockCookies",
+	loadDeferredImagesBlockStorage: "loadDeferredContentBlockStorage",
+	loadDeferredImagesKeepZoomLevel: "loadDeferredContentKeepZoomLevel",
+	loadDeferredImagesDispatchScrollEvent: "loadDeferredContentDispatchScrollEvent",
+	loadDeferredImagesBeforeFrames: "loadDeferredContentBeforeFrames",
+	blockAlternativeImages: "removeAlternativeImages"
+};
+const addEventListener = (type, listener, options) => globalThis.addEventListener(type, listener, options);
+const removeEventListener = (type, listener, options) => globalThis.removeEventListener(type, listener, options);
+// eslint-disable-next-line no-unused-vars
+const dispatchEvent = event => { try { globalThis.dispatchEvent(event); } catch (error) {  /* ignored */ } };
+const JSON = globalThis.JSON;
+const crypto = globalThis.crypto;
+const TextEncoder = globalThis.TextEncoder;
+const Blob = globalThis.Blob;
+const CustomEvent = globalThis.CustomEvent;
+const MutationObserver = globalThis.MutationObserver;
+const URL = globalThis.URL;
+const DOMParser = globalThis.DOMParser;
+const Uint8Array = globalThis.Uint8Array;
+const btoa = globalThis.btoa;
+const FileReader = globalThis.FileReader;
+
+export {
+	initUserScriptHandler,
+	getElementCharacters,
+	getPseudoElementCharacters,
+	getMarkerCharacters,
+	normalizeSerializedCSSText,
+	initDoc,
+	preProcessDoc,
+	postProcessDoc,
+	serialize,
+	removeQuotes,
+	flatten,
+	getFontWeight,
+	getFontStretch,
+	getStylesheetsInCascadeOrder,
+	normalizeFontFamily,
+	getShadowRoot,
+	appendInfobar,
+	getContentSize,
+	getDataURI,
+	digest,
+	getValidFilename,
+	DEFAULT_REPLACED_CHARACTERS,
+	DEFAULT_REPLACEMENT_CHARACTER,
+	DEFAULT_REPLACEMENT_CHARACTERS,
+	parseDocContent,
+	markInvalidNesting,
+	fixInvalidNesting,
+	removeNestingMarkers,
+	getNestingMarkerData,
+	normalizeOptions,
+	ON_BEFORE_CAPTURE_EVENT_NAME,
+	ON_AFTER_CAPTURE_EVENT_NAME,
+	WIN_ID_ATTRIBUTE_NAME,
+	PRESERVED_SPACE_ELEMENT_ATTRIBUTE_NAME,
+	REMOVED_CONTENT_ATTRIBUTE_NAME,
+	CUSTOM_STYLESHEET_ATTRIBUTE_NAME,
+	HIDDEN_CONTENT_ATTRIBUTE_NAME,
+	HIDDEN_FRAME_ATTRIBUTE_NAME,
+	IMAGE_ATTRIBUTE_NAME,
+	POSTER_ATTRIBUTE_NAME,
+	VIDEO_ATTRIBUTE_NAME,
+	CANVAS_ATTRIBUTE_NAME,
+	INPUT_VALUE_ATTRIBUTE_NAME,
+	INPUT_CHECKED_ATTRIBUTE_NAME,
+	SHADOW_ROOT_ATTRIBUTE_NAME,
+	SLOT_ATTRIBUTE_NAME,
+	ASSIGNED_SLOT_ATTRIBUTE_NAME,
+	ASSIGNED_SLOT_SEPARATOR,
+	STYLE_ATTRIBUTE_NAME,
+	LAZY_SRC_ATTRIBUTE_NAME,
+	STYLESHEET_ATTRIBUTE_NAME,
+	LINK_STYLESHEET_ATTRIBUTE_NAME,
+	SELECTED_CONTENT_ATTRIBUTE_NAME,
+	INVALID_ELEMENT_ATTRIBUTE_NAME,
+	ASYNC_SCRIPT_ATTRIBUTE_NAME,
+	COMMENT_HEADER,
+	COMMENT_HEADER_LEGACY,
+	SINGLE_FILE_UI_ELEMENT_CLASS,
+	EMPTY_RESOURCE,
+	INFOBAR_TAGNAME,
+	WAIT_FOR_USERSCRIPT_PROPERTY_NAME,
+	MESSAGE_PREFIX,
+	NO_SCRIPT_PROPERTY_NAME,
+	NESTING_TRACK_ID_ATTRIBUTE_NAME,
+	NESTING_START_MARKER,
+	NESTING_END_MARKER,
+	NESTING_RECREATED_ATTRIBUTE_NAME,
+	getPosterDataURI
+};
+
+function normalizeOptions(options) {
+	let normalizedOptions = options;
+	if (options) {
+		Object.keys(DEPRECATED_OPTION_NAMES).forEach(deprecatedName => {
+			const optionName = DEPRECATED_OPTION_NAMES[deprecatedName];
+			if (options[deprecatedName] !== undefined && options[optionName] === undefined) {
+				if (normalizedOptions == options) {
+					normalizedOptions = Object.assign({}, options);
+				}
+				normalizedOptions[optionName] = options[deprecatedName];
+			}
+		});
+	}
+	return normalizedOptions;
+}
+
+function getPosterDataURI(canvasElement) {
+	if (canvasElement.width && canvasElement.height) {
+		for (const contentType of POSTER_CONTENT_TYPES) {
+			const dataURI = canvasElement.toDataURL(contentType, POSTER_QUALITY);
+			if (dataURI.startsWith("data:" + contentType)) {
+				return dataURI;
+			}
+		}
+		const dataURI = canvasElement.toDataURL("image/png");
+		if (dataURI != EMPTY_RESOURCE) {
+			return dataURI;
+		}
+	}
+}
+
+let userScriptHandlerObserver;
+
+function initUserScriptHandler() {
+	addEventListener(ON_INIT_USERSCRIPT_EVENT, onInitUserScript);
+	if (!userScriptHandlerObserver) {
+		userScriptHandlerObserver = new MutationObserver(initUserScriptHandler);
+		userScriptHandlerObserver.observe(globalThis.document, { childList: true });
+	}
+}
+
+function onInitUserScript({ detail }) {
+	globalThis[WAIT_FOR_USERSCRIPT_PROPERTY_NAME] = async (eventPrefixName, options) => {
+		const userScriptOptions = Object.assign({}, options);
+		delete userScriptOptions.win;
+		delete userScriptOptions.doc;
+		delete userScriptOptions.onprogress;
+		delete userScriptOptions.frames;
+		delete userScriptOptions.taskId;
+		delete userScriptOptions._migratedTemplateFormat;
+		PROTECTED_OPTION_NAMES.forEach(name => delete userScriptOptions[name]);
+		let detailUserScript;
+		try {
+			detailUserScript = detail == "jsonDetail" ? JSON.stringify({ options: userScriptOptions }) : { options: userScriptOptions };
+			// eslint-disable-next-line no-unused-vars
+		} catch (error) {
+			// ignored
+		}
+		const event = new CustomEvent(eventPrefixName + "-request", { cancelable: true, detail: detailUserScript });
+		const responseEventName = eventPrefixName + "-response";
+		let resolvePromiseResponse;
+		const promiseResponse = new Promise(resolve => (resolvePromiseResponse = resolve));
+		const onResponse = event => {
+			if (event.detail) {
+				try {
+					const detail = typeof event.detail == "string" ? JSON.parse(event.detail) : event.detail;
+					if (detail.options) {
+						PROTECTED_OPTION_NAMES.forEach(name => delete detail.options[name]);
+						Object.assign(options, detail.options);
+					}
+					// eslint-disable-next-line no-unused-vars
+				} catch (error) {
+					// ignored
+				}
+			}
+			resolvePromiseResponse();
+		};
+		addEventListener(responseEventName, onResponse);
+		dispatchEvent(event);
+		if (event.defaultPrevented) {
+			await promiseResponse;
+		}
+		removeEventListener(responseEventName, onResponse);
+	};
+}
+
+function initDoc(doc) {
+	doc.querySelectorAll("meta[http-equiv=refresh]").forEach(element => {
+		element.removeAttribute("http-equiv");
+		element.setAttribute("disabled-http-equiv", "refresh");
+	});
+}
+
+function preProcessDoc(doc, win, options) {
+	doc.querySelectorAll("noscript:not([" + DISABLED_NOSCRIPT_ATTRIBUTE_NAME + "])").forEach(element => {
+		element.setAttribute(DISABLED_NOSCRIPT_ATTRIBUTE_NAME, element.textContent);
+		element.textContent = "";
+	});
+	initDoc(doc);
+	if (options.customStylesheet) {
+		insertCustomStylesheet(doc, options.customStylesheet);
+	}
+	if (doc.head) {
+		doc.head.querySelectorAll(FLOW_ELEMENTS_SELECTOR).forEach(element => element.hidden = true);
+	}
+	doc.querySelectorAll("svg foreignObject").forEach(element => {
+		const flowElements = element.querySelectorAll("html > head > " + FLOW_ELEMENTS_SELECTOR + ", html > body > " + FLOW_ELEMENTS_SELECTOR);
+		if (flowElements.length) {
+			Array.from(element.childNodes).forEach(node => node.remove());
+			flowElements.forEach(flowElement => element.appendChild(flowElement));
+		}
+	});
+	const invalidElements = new Map();
+	let elementsInfo;
+	if (win && doc.documentElement) {
+		markInvalidNesting(doc);
+		try {
+			doc.dispatchEvent(new CustomEvent(CLEAR_ADOPTED_STYLESHEETS_CACHE_EVENT));
+			// eslint-disable-next-line no-unused-vars
+		} catch (error) {
+			// ignored
+		}
+		elementsInfo = getElementsInfo(win, doc, doc.documentElement, options);
+		if (options.removeUnusedFonts && doc.defaultView) {
+			getRootElementUsedFonts(win, doc.documentElement, elementsInfo);
+		}
+		if (options.moveStylesInHead) {
+			doc.querySelectorAll("body style, body ~ style").forEach(element => {
+				const computedStyle = getComputedStyle(win, element);
+				if (computedStyle && testHiddenElement(element, computedStyle)) {
+					element.setAttribute(STYLE_ATTRIBUTE_NAME, "");
+					elementsInfo.markedElements.push(element);
+				}
+			});
+		}
+	} else {
+		elementsInfo = {
+			canvases: [],
+			images: [],
+			posters: [],
+			videos: [],
+			usedFonts: [],
+			usedFontsCharacters: new Map(),
+			shadowRoots: [],
+			markedElements: []
+		};
+	}
+	setNestingMarkersData(doc);
+	const linkStylesheets = markLinkStylesheets(doc, elementsInfo.markedElements);
+	let referrer = "";
+	if (doc.referrer) {
+		try {
+			referrer = new URL("/", new URL(doc.referrer).origin).href;
+			// eslint-disable-next-line no-unused-vars
+		} catch (error) {
+			// ignored
+		}
+	}
+	return {
+		canvases: elementsInfo.canvases,
+		fonts: getFontsData(),
+		worklets: getWorkletsData(),
+		stylesheets: getStylesheetsData(doc, elementsInfo.markedElements),
+		linkStylesheets,
+		images: elementsInfo.images,
+		posters: elementsInfo.posters,
+		videos: elementsInfo.videos,
+		usedFonts: Array.from(elementsInfo.usedFonts.values()),
+		usedFontsCharacters: serializeUsedFontsCharacters(elementsInfo.usedFontsCharacters),
+		shadowRoots: elementsInfo.shadowRoots,
+		referrer,
+		markedElements: elementsInfo.markedElements,
+		invalidElements,
+		scrollPosition: { x: win.scrollX, y: win.scrollY },
+		adoptedStyleSheets: getStylesheetsContent(doc.adoptedStyleSheets),
+		manifestData: options.manifest ? getManifestData(doc, win) : undefined
+	};
+}
+
+function getManifestData(doc, win) {
+	const manifestData = { url: doc.documentURI, timings: {} };
+	try {
+		const lastModified = new Date(doc.lastModified);
+		if (!isNaN(lastModified)) {
+			manifestData.lastModified = lastModified.toISOString();
+		}
+		// eslint-disable-next-line no-unused-vars
+	} catch (error) {
+		// ignored
+	}
+	try {
+		const performance = win.performance;
+		manifestData.timeOrigin = new Date(performance.timeOrigin).toISOString();
+		const [navigation] = performance.getEntriesByType("navigation");
+		if (navigation) {
+			manifestData.navigation = getTimingData(navigation);
+			manifestData.navigation.type = navigation.type;
+			manifestData.navigation.redirectCount = navigation.redirectCount;
+		}
+		performance.getEntriesByType("resource").forEach(entry => manifestData.timings[entry.name] = getTimingData(entry));
+		// eslint-disable-next-line no-unused-vars
+	} catch (error) {
+		// ignored
+	}
+	try {
+		manifestData.environment = {
+			userAgent: win.navigator.userAgent,
+			viewport: { width: win.innerWidth, height: win.innerHeight, devicePixelRatio: win.devicePixelRatio },
+			media: {
+				prefersColorScheme: win.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+				prefersReducedMotion: win.matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduce" : "no-preference"
+			}
+		};
+		// eslint-disable-next-line no-unused-vars
+	} catch (error) {
+		// ignored
+	}
+	return manifestData;
+}
+
+function getTimingData(entry) {
+	const timingData = {
+		transferSize: entry.transferSize,
+		encodedBodySize: entry.encodedBodySize,
+		decodedBodySize: entry.decodedBodySize,
+		nextHopProtocol: entry.nextHopProtocol
+	};
+	if (entry.responseStatus) {
+		timingData.status = entry.responseStatus;
+	}
+	return timingData;
+}
+
+function insertCustomStylesheet(doc, content) {
+	const parentElement = doc.body || doc.documentElement;
+	if (parentElement) {
+		const styleElement = doc.createElement("style");
+		styleElement.setAttribute(CUSTOM_STYLESHEET_ATTRIBUTE_NAME, "");
+		styleElement.textContent = content;
+		parentElement.appendChild(styleElement);
+	}
+}
+
+function markInvalidNesting(doc) {
+	if (!doc.body) {
+		return;
+	}
+	removeNestingMarkers(doc);
+	markInvalidNestingInRoot(doc, doc.body, "", () => serialize(doc));
+	getShadowRoots(doc.body).forEach((shadowRoot, indexShadowRoot) =>
+		markInvalidNestingInRoot(doc, shadowRoot, NESTING_SHADOW_ROOT_TRACK_ID_PREFIX + indexShadowRoot, () => shadowRoot.innerHTML));
+}
+
+function markInvalidNestingInRoot(doc, root, rootTrackId, getContent) {
+	if (rootTrackId) {
+		Array.from(root.children).forEach((child, indexChild) => addTrackIds(child, indexChild, rootTrackId));
+	} else {
+		addTrackIds(root);
+	}
+	const verificationDoc = parseDocContent(getContent());
+	const markedMap = buildTrackIdMap(root);
+	const normalizedMap = buildTrackIdMap(verificationDoc.documentElement);
+	const trackIds = new Set();
+	const droppedElements = [];
+	Object.keys(markedMap).forEach(id => {
+		if (id in normalizedMap) {
+			const markedParent = markedMap[id].parentElement?.getAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME) || null;
+			const normalizedParent = normalizedMap[id]?.parentElement?.getAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME) || null;
+			if (markedParent !== normalizedParent) {
+				let current = markedMap[id];
+				while (current && current !== root) {
+					const currentId = current.getAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME);
+					if (currentId) {
+						trackIds.add(currentId);
+					}
+					current = current.parentElement;
+				}
+			}
+		} else if (testDroppedElement(markedMap[id])) {
+			trackIds.add(id);
+			droppedElements.push(markedMap[id]);
+		}
+	});
+	droppedElements.forEach(element => {
+		const id = element.getAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME);
+		element.prepend(doc.createComment(NESTING_START_MARKER + id));
+		element.append(doc.createComment(NESTING_END_MARKER + id));
+	});
+	setNestingMarkersData(root);
+	if (rootTrackId) {
+		Array.from(root.children).forEach(child => cleanupTrackIds(child, trackIds));
+	} else {
+		cleanupTrackIds(root, trackIds);
+	}
+
+	function addTrackIds(element, index = 0, parentTrackId = "") {
+		const trackId = parentTrackId ? `${parentTrackId}.${index + 1}` : `${index + 1}`;
+		const tagName = element.tagName.toUpperCase();
+		if (!(parentTrackId && (tagName == "BODY" || tagName == "HEAD" || tagName == "HTML"))) {
+			element.setAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME, trackId);
+		}
+		Array.from(element.children).forEach((child, indexChild) => addTrackIds(child, indexChild, trackId));
+	}
+
+	function buildTrackIdMap(root) {
+		const trackIds = {};
+		if (root.getAttribute) {
+			traverse(root);
+		} else {
+			Array.from(root.children).forEach(traverse);
+		}
+		return trackIds;
+
+		function traverse(element) {
+			if (element.getAttribute) {
+				const id = element.getAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME);
+				if (id) {
+					trackIds[id] = element;
+				}
+				Array.from(element.children).forEach(traverse);
+			}
+		}
+	}
+
+	function testDroppedElement(element) {
+		if (element.namespaceURI != HTML_NAMESPACE) {
+			return false;
+		}
+		let ancestor = element.parentElement;
+		while (ancestor) {
+			const tagName = ancestor.tagName.toUpperCase();
+			if (tagName == "TEMPLATE" || RAW_TEXT_TAG_NAMES.includes(tagName)) {
+				return false;
+			}
+			ancestor = ancestor.parentElement;
+		}
+		return true;
+	}
+
+	function cleanupTrackIds(element, toKeep) {
+		const id = element.getAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME);
+		if (id && !toKeep.has(id)) {
+			element.removeAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME);
+		}
+		Array.from(element.children).forEach(child => cleanupTrackIds(child, toKeep));
+	}
+}
+
+function getShadowRoots(element, shadowRoots = []) {
+	Array.from(element.children).forEach(child => {
+		if (child.namespaceURI == HTML_NAMESPACE && !child.classList.contains(SINGLE_FILE_UI_ELEMENT_CLASS) && child.tagName.toLowerCase() != INFOBAR_TAGNAME) {
+			const shadowRoot = getShadowRoot(child);
+			if (shadowRoot) {
+				shadowRoots.push(shadowRoot);
+				getShadowRoots(shadowRoot, shadowRoots);
+			}
+		}
+		getShadowRoots(child, shadowRoots);
+	});
+	return shadowRoots;
+}
+
+function getNestingMarkerData(element) {
+	return encodeURIComponent(JSON.stringify({
+		tag: element.localName,
+		attributes: Array.from(element.attributes)
+			.filter(attribute => attribute.name != NESTING_RECREATED_ATTRIBUTE_NAME)
+			.map(attribute => [attribute.name, attribute.value])
+	}));
+}
+
+function setNestingMarkersData(root) {
+	const walker = (root.ownerDocument || root).createTreeWalker(root, COMMENT_NODE_FILTER);
+	while (walker.nextNode()) {
+		const comment = walker.currentNode;
+		if (comment.data.startsWith(NESTING_START_MARKER)) {
+			const id = comment.data.substring(NESTING_START_MARKER.length).split(" ")[0];
+			comment.data = NESTING_START_MARKER + id + " " + getNestingMarkerData(comment.parentNode);
+		}
+	}
+}
+
+function removeNestingMarkers(doc) {
+	if (doc.body) {
+		[doc, ...getShadowRoots(doc.body)].forEach(root => {
+			const comments = [];
+			const walker = doc.createTreeWalker(root, COMMENT_NODE_FILTER);
+			while (walker.nextNode()) {
+				if (walker.currentNode.data.startsWith(NESTING_START_MARKER) || walker.currentNode.data.startsWith(NESTING_END_MARKER)) {
+					comments.push(walker.currentNode);
+				}
+			}
+			comments.forEach(comment => comment.remove());
+		});
+	}
+}
+
+function fixInvalidNesting(document, NESTING_TRACK_ID_ATTRIBUTE_NAME, preventCleanup = false, options = {}) {
+	const START_MARKER = NESTING_TRACK_ID_ATTRIBUTE_NAME + "-start ";
+	const END_MARKER = NESTING_TRACK_ID_ATTRIBUTE_NAME + "-end ";
+	const RECREATED_ATTRIBUTE_NAME = NESTING_TRACK_ID_ATTRIBUTE_NAME + "-recreated";
+	if (document.currentScript) {
+		document.currentScript.remove();
+	}
+	const roots = [];
+	if (options.rootElement) {
+		roots.push(options.rootElement);
+	} else if (document.body) {
+		addRoots(document.body);
+	}
+	roots.forEach(root => {
+		recreateElements(root);
+		if (!options.recreateOnly) {
+			moveElements(root);
+		}
+	});
+	if (!preventCleanup) {
+		roots.forEach(root => {
+			const elements = Array.from(root.querySelectorAll("[" + NESTING_TRACK_ID_ATTRIBUTE_NAME + "]"));
+			if (root.getAttribute && root.getAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME)) {
+				elements.push(root);
+			}
+			elements.forEach(element => element.removeAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME));
+		});
+	}
+
+	function addRoots(root) {
+		roots.push(root);
+		root.querySelectorAll("*").forEach(element => {
+			if (element.shadowRoot) {
+				addRoots(element.shadowRoot);
+			}
+		});
+	}
+
+	function recreateElements(root) {
+		const startComments = [];
+		const walker = document.createTreeWalker(root, 128);
+		while (walker.nextNode()) {
+			if (walker.currentNode.data.startsWith(START_MARKER)) {
+				startComments.push(walker.currentNode);
+			}
+		}
+		startComments.forEach(startComment => {
+			const separatorIndex = startComment.data.indexOf(" ", START_MARKER.length);
+			let endComment, data;
+			if (separatorIndex != -1) {
+				const id = startComment.data.substring(START_MARKER.length, separatorIndex);
+				endComment = startComment.nextSibling;
+				while (endComment && !(endComment.nodeType == 8 && endComment.data == END_MARKER + id)) {
+					endComment = endComment.nextSibling;
+				}
+				try {
+					data = globalThis.JSON.parse(decodeURIComponent(startComment.data.substring(separatorIndex + 1)));
+				} catch {
+					/* ignored */
+				}
+			}
+			if (endComment && data) {
+				const element = document.createElement(data.tag);
+				data.attributes.forEach(([name, value]) => {
+					try {
+						element.setAttribute(name, value);
+					} catch {
+						/* ignored */
+					}
+				});
+				if (preventCleanup) {
+					element.setAttribute(RECREATED_ATTRIBUTE_NAME, "");
+				}
+				startComment.before(element);
+				while (startComment.nextSibling != endComment) {
+					element.appendChild(startComment.nextSibling);
+				}
+				startComment.remove();
+				endComment.remove();
+			}
+		});
+	}
+
+	function moveElements(root) {
+		const trackIds = {};
+		const elements = [];
+		if (root.getAttribute) {
+			buildTrackIdMap(root);
+		} else {
+			Array.from(root.children).forEach(buildTrackIdMap);
+		}
+		elements.forEach(element => {
+			const id = element.getAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME);
+			const originalElement = trackIds[id];
+			if (originalElement != element) {
+				if (!preventCleanup || options.mergeCopies) {
+					if (originalElement.contains(element)) {
+						element.replaceWith(...element.childNodes);
+					} else {
+						originalElement.append(...element.childNodes);
+						element.remove();
+					}
+				}
+			} else {
+				const idParts = id.split(".");
+				if (idParts.length > 1) {
+					const parentId = idParts.slice(0, -1).join(".");
+					const expectedParent = trackIds[parentId];
+					if (expectedParent && element.parentElement !== expectedParent && !element.contains(expectedParent)) {
+						const followingNodes = [];
+						let sibling = element.nextSibling;
+						while (sibling && sibling.nodeType != 1) {
+							followingNodes.push(sibling);
+							sibling = sibling.nextSibling;
+						}
+						expectedParent.appendChild(element);
+						if (sibling && trackIds[sibling.getAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME)] === sibling && getParentTrackId(sibling) == parentId) {
+							expectedParent.append(...followingNodes);
+						}
+					}
+				}
+			}
+		});
+
+		function getParentTrackId(element) {
+			return element.getAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME).split(".").slice(0, -1).join(".");
+		}
+
+		function buildTrackIdMap(element) {
+			const id = element.getAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME);
+			if (id) {
+				if (!(id in trackIds)) {
+					trackIds[id] = element;
+				}
+				elements.push(element);
+			}
+			Array.from(element.children).forEach(buildTrackIdMap);
+		}
+	}
+}
+
+function getElementsInfo(win, doc, element, options, data = { usedFonts: new Map(), usedFontsCharacters: new Map(), canvases: [], images: [], posters: [], videos: [], shadowRoots: [], markedElements: [] }, adoptedStyleSheetsCache = new Map(), ascendantHidden) {
+	if (element.childNodes) {
+		const elements = Array.from(element.childNodes).filter(node => (node instanceof win.HTMLElement) || (node instanceof win.SVGElement) || (node instanceof globalThis.HTMLElement) || (node instanceof globalThis.SVGElement));
+		elements.forEach(element => {
+			let elementHidden, elementKept, computedStyle, headChild;
+			if (!options.autoSaveExternalSave && (options.removeHiddenElements || options.removeUnusedFonts || options.removeUnusedGlyphs || options.compressHTML)) {
+				computedStyle = getComputedStyle(win, element);
+				if (options.removeHiddenElements || options.removeUnusedFonts || options.removeUnusedGlyphs) {
+					headChild = Boolean(element.closest("html > head"));
+				}
+				if ((element instanceof win.HTMLElement) || (element instanceof globalThis.HTMLElement)) {
+					if (options.removeHiddenElements) {
+						elementKept = ((ascendantHidden || headChild) && KEPT_TAG_NAMES.includes(element.tagName.toUpperCase())) || element.closest("details") || testInvokedElement(element, doc, data);
+						if (!elementKept) {
+							elementHidden = ascendantHidden || testHiddenElement(element, computedStyle);
+							if (elementHidden && !IGNORED_TAG_NAMES.includes(element.tagName.toUpperCase())) {
+								element.setAttribute(HIDDEN_CONTENT_ATTRIBUTE_NAME, "");
+								data.markedElements.push(element);
+							}
+						}
+					}
+				}
+				if (!elementHidden) {
+					if (options.compressHTML && computedStyle) {
+						const whiteSpace = computedStyle.getPropertyValue("white-space");
+						if (whiteSpace && whiteSpace.startsWith("pre")) {
+							element.setAttribute(PRESERVED_SPACE_ELEMENT_ATTRIBUTE_NAME, "");
+							data.markedElements.push(element);
+						}
+					}
+					if ((options.removeUnusedFonts || options.removeUnusedGlyphs) && doc.defaultView && !headChild) {
+						const elementCharacters = getElementCharacters(win, element, computedStyle);
+						getUsedFont(computedStyle, data.usedFonts, data.usedFontsCharacters, elementCharacters);
+						const beforeStyle = getComputedStyle(win, element, ":before");
+						getUsedFont(beforeStyle, data.usedFonts, data.usedFontsCharacters, getPseudoElementCharacters(beforeStyle, element));
+						const afterStyle = getComputedStyle(win, element, ":after");
+						getUsedFont(afterStyle, data.usedFonts, data.usedFontsCharacters, getPseudoElementCharacters(afterStyle, element));
+						const display = computedStyle ? computedStyle.getPropertyValue("display") : "";
+						const tagName = element.tagName.toUpperCase();
+						if (display == "list-item") {
+							const markerStyle = getComputedStyle(win, element, "::marker");
+							getUsedFont(markerStyle, data.usedFonts, data.usedFontsCharacters, getMarkerCharacters(markerStyle, computedStyle, element));
+						}
+						if (BLOCK_CONTAINER_DISPLAY_VALUES.includes(display)) {
+							getUsedFont(getComputedStyle(win, element, ":first-letter"), data.usedFonts, data.usedFontsCharacters, elementCharacters);
+							getUsedFont(getComputedStyle(win, element, "::first-line"), data.usedFonts, data.usedFontsCharacters, elementCharacters);
+						}
+						if ((tagName == "INPUT" || tagName == "TEXTAREA") && element.getAttribute("placeholder")) {
+							getUsedFont(getComputedStyle(win, element, "::placeholder"), data.usedFonts, data.usedFontsCharacters, { characters: element.getAttribute("placeholder") });
+						}
+						if (tagName == "INPUT" && element.type == "file") {
+							getUsedFont(getComputedStyle(win, element, "::file-selector-button"), data.usedFonts);
+						}
+					}
+				}
+			}
+			getResourcesInfo(win, doc, element, options, data, elementHidden, computedStyle);
+			const shadowRoot = !((element instanceof win.SVGElement) || (element instanceof globalThis.SVGElement)) && getShadowRoot(element);
+			if (shadowRoot && !element.classList.contains(SINGLE_FILE_UI_ELEMENT_CLASS) && element.tagName.toLowerCase() != INFOBAR_TAGNAME) {
+				const shadowRootInfo = {};
+				element.setAttribute(SHADOW_ROOT_ATTRIBUTE_NAME, data.shadowRoots.length);
+				data.markedElements.push(element);
+				data.shadowRoots.push(shadowRootInfo);
+				try {
+					if (shadowRoot.adoptedStyleSheets) {
+
+						const listener = event => shadowRootInfo.adoptedStyleSheets = event.detail.adoptedStyleSheets;
+						shadowRoot.addEventListener(GET_ADOPTED_STYLESHEETS_RESPONSE_EVENT, listener);
+						shadowRoot.dispatchEvent(new CustomEvent(GET_ADOPTED_STYLESHEETS_REQUEST_EVENT, { bubbles: true }));
+						if (!shadowRootInfo.adoptedStyleSheets) {
+							element.dispatchEvent(new CustomEvent(GET_ADOPTED_STYLESHEETS_REQUEST_EVENT, { bubbles: true }));
+						}
+						shadowRoot.removeEventListener(GET_ADOPTED_STYLESHEETS_RESPONSE_EVENT, listener);
+
+					}
+					// eslint-disable-next-line no-unused-vars
+				} catch (error) {
+					// ignored
+				}
+				getElementsInfo(win, doc, shadowRoot, options, data, adoptedStyleSheetsCache, elementHidden);
+				setNestingMarkersData(shadowRoot);
+				if (shadowRoot.slotAssignment == "manual") {
+					shadowRootInfo.slotAssignment = shadowRoot.slotAssignment;
+					shadowRoot.querySelectorAll("slot").forEach((slotElement, indexSlot) => {
+						slotElement.setAttribute(SLOT_ATTRIBUTE_NAME, indexSlot);
+						data.markedElements.push(slotElement);
+						slotElement.assignedNodes().filter(node => node.nodeType == ELEMENT_NODE_TYPE).forEach((node, indexNode) => {
+							node.setAttribute(ASSIGNED_SLOT_ATTRIBUTE_NAME, indexSlot + ASSIGNED_SLOT_SEPARATOR + indexNode);
+							data.markedElements.push(node);
+						});
+					});
+				}
+				shadowRootInfo.content = shadowRoot.innerHTML;
+				shadowRootInfo.mode = shadowRoot.mode;
+				shadowRootInfo.delegatesFocus = shadowRoot.delegatesFocus;
+				shadowRootInfo.clonable = shadowRoot.clonable;
+				shadowRootInfo.serializable = shadowRoot.serializable;
+				try {
+					if (shadowRoot.adoptedStyleSheets) {
+						shadowRoot.dispatchEvent(new CustomEvent(UNREGISTER_GET_ADOPTED_STYLESHEETS_REQUEST_EVENT, { bubbles: true }));
+					}
+					// eslint-disable-next-line no-unused-vars
+				} catch (error) {
+					// ignored
+				}
+			}
+			getElementsInfo(win, doc, element, options, data, adoptedStyleSheetsCache, elementHidden);
+			if (!options.autoSaveExternalSave && options.removeHiddenElements && ascendantHidden) {
+				if (elementKept || element.getAttribute(KEPT_CONTENT_ATTRIBUTE_NAME) == "") {
+					if (element.parentElement) {
+						element.parentElement.setAttribute(KEPT_CONTENT_ATTRIBUTE_NAME, "");
+						data.markedElements.push(element.parentElement);
+					}
+				} else if (elementHidden) {
+					element.setAttribute(REMOVED_CONTENT_ATTRIBUTE_NAME, "");
+					data.markedElements.push(element);
+				}
+			}
+		});
+	}
+	return data;
+}
+
+function getStylesheetsContent(styleSheets, adoptedStyleSheetsCache = new Map()) {
+	if (styleSheets) {
+		const result = [];
+		for (const styleSheet of Array.from(styleSheets)) {
+			if (adoptedStyleSheetsCache.has(styleSheet)) {
+				result.push(adoptedStyleSheetsCache.get(styleSheet));
+			} else {
+				let cssText = "";
+				if (styleSheet && styleSheet.cssRules) {
+					for (const cssRule of styleSheet.cssRules) {
+						cssText += getSerializedCSSText(cssRule) + "\n";
+					}
+				}
+				adoptedStyleSheetsCache.set(styleSheet, cssText);
+				result.push(cssText);
+			}
+		}
+		return result;
+	} else {
+		return [];
+	}
+}
+
+function isBlankCanvas(doc, element, dataURI) {
+	const blankElement = doc.createElement("canvas");
+	blankElement.width = element.width;
+	blankElement.height = element.height;
+	return blankElement.toDataURL("image/png") == dataURI;
+}
+
+function getResourcesInfo(win, doc, element, options, data, elementHidden, computedStyle) {
+	const tagName = element.tagName && element.tagName.toUpperCase();
+	if (tagName == "CANVAS") {
+		const canvasComputedStyle = computedStyle || getComputedStyle(win, element);
+		const canvasData = {
+			backgroundColor: canvasComputedStyle && canvasComputedStyle.getPropertyValue("background-color")
+		};
+		try {
+			const dataURI = element.toDataURL("image/png");
+			const backgroundImage = canvasComputedStyle ? canvasComputedStyle.getPropertyValue("background-image") : element.style.getPropertyValue("background-image");
+			if (backgroundImage && backgroundImage != "none" && isBlankCanvas(doc, element, dataURI)) {
+				canvasData.blank = true;
+			} else {
+				canvasData.dataURI = dataURI;
+			}
+			// eslint-disable-next-line no-unused-vars
+		} catch (error) {
+			// ignored
+		}
+		data.canvases.push(canvasData);
+		element.setAttribute(CANVAS_ATTRIBUTE_NAME, data.canvases.length - 1);
+		data.markedElements.push(element);
+	}
+	if (tagName == "IMG") {
+		const imageData = {
+			currentSrc: elementHidden ?
+				EMPTY_RESOURCE :
+				(options.loadDeferredContent && element.getAttribute(LAZY_SRC_ATTRIBUTE_NAME)) || element.currentSrc
+		};
+		if (!elementHidden && element.parentElement && element.parentElement.tagName.toUpperCase() == "PICTURE") {
+			imageData.sourceSize = getSourceSize(win, element.parentElement, imageData.currentSrc);
+		}
+		data.images.push(imageData);
+		element.setAttribute(IMAGE_ATTRIBUTE_NAME, data.images.length - 1);
+		data.markedElements.push(element);
+		element.removeAttribute(LAZY_SRC_ATTRIBUTE_NAME);
+		computedStyle = computedStyle || getComputedStyle(win, element);
+		if (computedStyle && element.complete) {
+			imageData.size = getSize(win, element, computedStyle);
+			const boxShadow = computedStyle.getPropertyValue("box-shadow");
+			const backgroundImage = computedStyle.getPropertyValue("background-image");
+			if ((!boxShadow || boxShadow == "none") &&
+				(!backgroundImage || backgroundImage == "none") &&
+				(imageData.size.pxWidth > 1 || imageData.size.pxHeight > 1)) {
+				imageData.replaceable = true;
+				imageData.backgroundColor = computedStyle.getPropertyValue("background-color");
+				imageData.objectFit = computedStyle.getPropertyValue("object-fit");
+				imageData.boxSizing = computedStyle.getPropertyValue("box-sizing");
+				imageData.objectPosition = computedStyle.getPropertyValue("object-position");
+			}
+		}
+	}
+	if (tagName == "VIDEO") {
+		const src = element.currentSrc;
+		if (src && !src.startsWith("blob:") && !src.startsWith("data:")) {
+			const computedStyle = getComputedStyle(win, element);
+			const blockLevel = Boolean(computedStyle) && BLOCK_LEVEL_DISPLAY_VALUES.includes(computedStyle.getPropertyValue("display"));
+			data.videos.push({
+				blockLevel,
+				linkOffset: getVideoLinkOffset(doc, element, blockLevel),
+				src,
+				size: {
+					pxWidth: element.clientWidth,
+					pxHeight: element.clientHeight,
+					videoWidth: element.videoWidth,
+					videoHeight: element.videoHeight
+				},
+				currentTime: element.currentTime
+			});
+			element.setAttribute(VIDEO_ATTRIBUTE_NAME, data.videos.length - 1);
+		}
+		if (options.blockVideos && !element.getAttribute("poster")) {
+			const canvasElement = doc.createElement("canvas");
+			const context = canvasElement.getContext("2d");
+			canvasElement.width = element.videoWidth;
+			canvasElement.height = element.videoHeight;
+			try {
+				context.drawImage(element, 0, 0, canvasElement.width, canvasElement.height);
+				const posterDataURI = getPosterDataURI(canvasElement);
+				if (posterDataURI) {
+					data.posters.push(posterDataURI);
+					element.setAttribute(POSTER_ATTRIBUTE_NAME, data.posters.length - 1);
+					data.markedElements.push(element);
+				}
+				// eslint-disable-next-line no-unused-vars
+			} catch (error) {
+				// ignored
+			}
+		}
+	}
+	if (tagName == "INPUT") {
+		if (element.type != "password") {
+			element.setAttribute(INPUT_VALUE_ATTRIBUTE_NAME, element.value);
+			data.markedElements.push(element);
+		}
+		if (element.type == "radio" || element.type == "checkbox") {
+			element.setAttribute(INPUT_CHECKED_ATTRIBUTE_NAME, element.checked);
+			data.markedElements.push(element);
+		}
+	}
+	if (tagName == "TEXTAREA") {
+		element.setAttribute(INPUT_VALUE_ATTRIBUTE_NAME, element.value);
+		data.markedElements.push(element);
+	}
+	if (tagName == "SELECT") {
+		element.querySelectorAll("option").forEach(option => {
+			if (option.selected) {
+				option.setAttribute(INPUT_VALUE_ATTRIBUTE_NAME, "");
+				data.markedElements.push(option);
+			}
+		});
+	}
+	if (tagName == "SCRIPT") {
+		if (element.async && element.getAttribute("async") != "" && element.getAttribute("async") != "async") {
+			element.setAttribute(ASYNC_SCRIPT_ATTRIBUTE_NAME, "");
+			data.markedElements.push(element);
+		}
+		element.textContent = element.textContent.replace(/<\/script>/gi, "<\\/script>");
+	}
+}
+
+function getUsedFont(computedStyle, usedFonts, usedFontsCharacters, drawnCharacters) {
+	if (computedStyle) {
+		const fontStyle = computedStyle.getPropertyValue("font-style") || "normal";
+		computedStyle.getPropertyValue("font-family").split(",").forEach(fontFamilyName => {
+			fontFamilyName = normalizeFontFamily(fontFamilyName);
+			if (fontFamilyName) {
+				const fontWeight = getFontWeight(computedStyle.getPropertyValue("font-weight"));
+				const fontVariant = computedStyle.getPropertyValue("font-variant") || "normal";
+				const fontStretch = getFontStretch(computedStyle.getPropertyValue("font-stretch") || "normal");
+				const value = [fontFamilyName, fontWeight, fontStyle, fontVariant, fontStretch];
+				usedFonts.set(JSON.stringify(value), value);
+				if (usedFontsCharacters && drawnCharacters) {
+					addUsedFontCharacters(usedFontsCharacters, fontFamilyName, fontStyle, drawnCharacters);
+				}
+			}
+		});
+	}
+}
+
+function addUsedFontCharacters(usedFontsCharacters, fontFamilyName, fontStyle, drawnCharacters) {
+	const key = fontFamilyName + "|" + fontStyle;
+	let bucket = usedFontsCharacters.get(key);
+	if (!bucket) {
+		bucket = { fontFamily: fontFamilyName, fontStyle, charCodes: new Set(), unknown: false };
+		usedFontsCharacters.set(key, bucket);
+	}
+	if (drawnCharacters.unknown) {
+		bucket.unknown = true;
+	}
+	for (const character of drawnCharacters.characters) {
+		bucket.charCodes.add(character.codePointAt(0));
+	}
+}
+
+function getElementCharacters(win, element, computedStyle) {
+	let characters = "";
+	const tagName = element.tagName && element.tagName.toUpperCase();
+	if (tagName == "INPUT" || tagName == "TEXTAREA" || tagName == "BUTTON") {
+		characters += (element.value || "") + (element.getAttribute("placeholder") || "");
+	}
+	if (element.childNodes) {
+		Array.from(element.childNodes).forEach(node => {
+			if (node.nodeType == TEXT_NODE_TYPE) {
+				characters += node.data;
+			} else if (node.nodeType == ELEMENT_NODE_TYPE &&
+				!((node instanceof win.HTMLElement) || (node instanceof win.SVGElement) ||
+					(node instanceof globalThis.HTMLElement) || (node instanceof globalThis.SVGElement))) {
+				characters += node.textContent;
+			}
+		});
+	}
+	return transformCharacters({ characters }, computedStyle, element);
+}
+
+function getMarkerCharacters(markerStyle, computedStyle, element) {
+	const content = markerStyle && markerStyle.getPropertyValue("content");
+	if (content == "none") {
+		return { characters: "" };
+	}
+	if (content && content != "normal") {
+		return getPseudoElementCharacters(markerStyle, element);
+	}
+	const listStyleType = computedStyle ? computedStyle.getPropertyValue("list-style-type").trim() : "";
+	if (Object.prototype.hasOwnProperty.call(COUNTER_STYLE_CHARACTERS, listStyleType)) {
+		const characters = COUNTER_STYLE_CHARACTERS[listStyleType];
+		return transformCharacters({ characters: characters ? characters + MARKER_SUFFIX : "" }, markerStyle || computedStyle, element);
+	}
+	REGEXP_QUOTED_STRING.lastIndex = 0;
+	const match = REGEXP_QUOTED_STRING.exec(listStyleType);
+	if (match && match[0] == listStyleType) {
+		const characters = match[1] === undefined ? match[2] : match[1];
+		return transformCharacters({ characters, unknown: REGEXP_BACKSLASH.test(characters) }, markerStyle || computedStyle, element);
+	}
+	return { characters: "", unknown: true };
+}
+
+function transformCharacters(drawnCharacters, computedStyle, element) {
+	const textTransform = computedStyle && computedStyle.getPropertyValue("text-transform");
+	if (!textTransform || textTransform == "none" || !drawnCharacters.characters) {
+		return drawnCharacters;
+	}
+	const sourceCharacters = drawnCharacters.characters;
+	let characters = sourceCharacters, unknown = drawnCharacters.unknown;
+	const langElement = element && element.closest && element.closest("[lang]");
+	const lang = langElement && langElement.getAttribute("lang");
+	textTransform.trim().split(REGEXP_TEXT_TRANSFORM_SEPARATOR).forEach(value => {
+		try {
+			if (value == "uppercase" || value == "capitalize") {
+				characters += sourceCharacters.toUpperCase() + (lang ? sourceCharacters.toLocaleUpperCase(lang) : "");
+			} else if (value == "lowercase") {
+				characters += sourceCharacters.toLowerCase() + (lang ? sourceCharacters.toLocaleLowerCase(lang) : "");
+			} else if (value == "full-width") {
+				characters += getFullWidthCharacters(sourceCharacters);
+			} else {
+				unknown = true;
+			}
+			// eslint-disable-next-line no-unused-vars
+		} catch (error) {
+			unknown = true;
+		}
+	});
+	return { characters, unknown };
+}
+
+function getFullWidthCharacters(characters) {
+	let result = "";
+	for (const character of characters) {
+		const codePoint = character.codePointAt(0);
+		if (codePoint == 0x20) {
+			result += FULL_WIDTH_SPACE;
+		} else if (codePoint > 0x20 && codePoint < 0x7F) {
+			result += String.fromCodePoint(codePoint + FULL_WIDTH_OFFSET);
+		} else {
+			result += character;
+		}
+	}
+	return result;
+}
+
+// getElementsInfo iterates the children of the element it is given, so the root is never visited.
+// An inherited property costs nothing there, since every descendant carries the root's value, but a
+// pseudo-element on the root has no descendant to speak for it: html::before renders a box with a
+// font of its own and nothing else records it. Only a pseudo that generates content is recorded,
+// because the computed style of a pseudo that draws nothing still reports the inherited family and
+// registering that would mark the whole root font stack as used.
+function getRootElementUsedFonts(win, element, data) {
+	ROOT_PSEUDO_ELEMENT_NAMES.forEach(pseudoElementName => {
+		const computedStyle = getComputedStyle(win, element, pseudoElementName);
+		const drawnCharacters = getPseudoElementCharacters(computedStyle, element);
+		if (drawnCharacters.characters || drawnCharacters.unknown) {
+			getUsedFont(computedStyle, data.usedFonts, data.usedFontsCharacters, drawnCharacters);
+		}
+	});
+}
+
+function getPseudoElementCharacters(computedStyle, element) {
+	const content = computedStyle && computedStyle.getPropertyValue("content");
+	if (!content || content == "none" || content == "normal") {
+		return { characters: "" };
+	}
+	let characters = "";
+	REGEXP_QUOTED_STRING.lastIndex = 0;
+	let match = REGEXP_QUOTED_STRING.exec(content);
+	while (match) {
+		characters += match[1] === undefined ? match[2] : match[1];
+		match = REGEXP_QUOTED_STRING.exec(content);
+	}
+	const remainder = content
+		.replace(REGEXP_QUOTED_STRING, "")
+		.replace(REGEXP_GENERATED_CONTENT_IMAGE, "")
+		.trim();
+	return transformCharacters({ characters, unknown: Boolean(remainder) || REGEXP_BACKSLASH.test(characters) }, computedStyle, element);
+}
+
+function serializeUsedFontsCharacters(usedFontsCharacters) {
+	return Array.from(usedFontsCharacters.values()).map(bucket => {
+		const ranges = [];
+		Array.from(bucket.charCodes).sort((charCode1, charCode2) => charCode1 - charCode2).forEach(charCode => {
+			const lastRange = ranges[ranges.length - 1];
+			if (lastRange && charCode == lastRange[1] + 1) {
+				lastRange[1] = charCode;
+			} else {
+				ranges.push([charCode, charCode]);
+			}
+		});
+		return [bucket.fontFamily, bucket.fontStyle, ranges, bucket.unknown ? 1 : 0];
+	});
+}
+
+function getShadowRoot(element) {
+	const chrome = globalThis.chrome;
+	if (element.openOrClosedShadowRoot) {
+		return element.openOrClosedShadowRoot;
+	} else if (chrome && chrome.dom && chrome.dom.openOrClosedShadowRoot) {
+		try {
+			return chrome.dom.openOrClosedShadowRoot(element);
+			// eslint-disable-next-line no-unused-vars
+		} catch (error) {
+			return element.shadowRoot;
+		}
+	} else {
+		return element.shadowRoot;
+	}
+}
+
+function appendInfobar(doc, options, useShadowRoot) {
+	return infobar.appendInfobar(doc, options, useShadowRoot);
+}
+
+function normalizeFontFamily(fontFamilyName = "") {
+	return removeQuotes(cssUnescape.process(fontFamilyName.trim())).toLowerCase();
+}
+
+function testInvokedElement(element, doc, data) {
+	const invokableElement = element.closest(INVOKABLE_ELEMENTS_SELECTOR);
+	if (invokableElement) {
+		if (!data.invokedIds) {
+			data.invokedIds = new Set();
+			doc.querySelectorAll(INVOKERS_SELECTOR).forEach(invoker => INVOKER_ATTRIBUTE_NAMES.forEach(attributeName => {
+				if (invoker.hasAttribute(attributeName)) {
+					data.invokedIds.add(invoker.getAttribute(attributeName));
+				}
+			}));
+		}
+		return data.invokedIds.has(invokableElement.id);
+	}
+	return false;
+}
+
+function testHiddenElement(element, computedStyle) {
+	let hidden = false;
+	if (computedStyle) {
+		const display = computedStyle.getPropertyValue("display");
+		const opacity = computedStyle.getPropertyValue("opacity");
+		const visibility = computedStyle.getPropertyValue("visibility");
+		hidden = display == "none";
+		if (!hidden && (opacity == "0" || visibility == "hidden") && element.getBoundingClientRect) {
+			const boundingRect = element.getBoundingClientRect();
+			hidden = !boundingRect.width && !boundingRect.height;
+		}
+	}
+	return Boolean(hidden);
+}
+
+function postProcessDoc(doc, markedElements, invalidElements) {
+	removeNestingMarkers(doc);
+	doc.querySelectorAll("style[" + CUSTOM_STYLESHEET_ATTRIBUTE_NAME + "]").forEach(element => element.remove());
+	doc.querySelectorAll("[" + DISABLED_NOSCRIPT_ATTRIBUTE_NAME + "]").forEach(element => {
+		element.textContent = element.getAttribute(DISABLED_NOSCRIPT_ATTRIBUTE_NAME);
+		element.removeAttribute(DISABLED_NOSCRIPT_ATTRIBUTE_NAME);
+	});
+	doc.querySelectorAll("meta[disabled-http-equiv]").forEach(element => {
+		element.setAttribute("http-equiv", element.getAttribute("disabled-http-equiv"));
+		element.removeAttribute("disabled-http-equiv");
+	});
+	if (doc.head) {
+		doc.head.querySelectorAll("*:not(base):not(link):not(meta):not(noscript):not(script):not(style):not(template):not(title)").forEach(element => element.removeAttribute("hidden"));
+	}
+	if (!markedElements) {
+		const singleFileAttributes = [REMOVED_CONTENT_ATTRIBUTE_NAME, HIDDEN_FRAME_ATTRIBUTE_NAME, HIDDEN_CONTENT_ATTRIBUTE_NAME, PRESERVED_SPACE_ELEMENT_ATTRIBUTE_NAME, IMAGE_ATTRIBUTE_NAME, POSTER_ATTRIBUTE_NAME, VIDEO_ATTRIBUTE_NAME, CANVAS_ATTRIBUTE_NAME, INPUT_VALUE_ATTRIBUTE_NAME, INPUT_CHECKED_ATTRIBUTE_NAME, SHADOW_ROOT_ATTRIBUTE_NAME, SLOT_ATTRIBUTE_NAME, ASSIGNED_SLOT_ATTRIBUTE_NAME, STYLESHEET_ATTRIBUTE_NAME, LINK_STYLESHEET_ATTRIBUTE_NAME, ASYNC_SCRIPT_ATTRIBUTE_NAME];
+		markedElements = doc.querySelectorAll(singleFileAttributes.map(name => "[" + name + "]").join(","));
+	}
+	markedElements.forEach(element => {
+		element.removeAttribute(REMOVED_CONTENT_ATTRIBUTE_NAME);
+		element.removeAttribute(HIDDEN_CONTENT_ATTRIBUTE_NAME);
+		element.removeAttribute(KEPT_CONTENT_ATTRIBUTE_NAME);
+		element.removeAttribute(HIDDEN_FRAME_ATTRIBUTE_NAME);
+		element.removeAttribute(PRESERVED_SPACE_ELEMENT_ATTRIBUTE_NAME);
+		element.removeAttribute(IMAGE_ATTRIBUTE_NAME);
+		element.removeAttribute(POSTER_ATTRIBUTE_NAME);
+		element.removeAttribute(VIDEO_ATTRIBUTE_NAME);
+		element.removeAttribute(CANVAS_ATTRIBUTE_NAME);
+		element.removeAttribute(INPUT_VALUE_ATTRIBUTE_NAME);
+		element.removeAttribute(INPUT_CHECKED_ATTRIBUTE_NAME);
+		element.removeAttribute(SHADOW_ROOT_ATTRIBUTE_NAME);
+		element.removeAttribute(SLOT_ATTRIBUTE_NAME);
+		element.removeAttribute(ASSIGNED_SLOT_ATTRIBUTE_NAME);
+		element.removeAttribute(STYLESHEET_ATTRIBUTE_NAME);
+		element.removeAttribute(LINK_STYLESHEET_ATTRIBUTE_NAME);
+		element.removeAttribute(ASYNC_SCRIPT_ATTRIBUTE_NAME);
+		element.removeAttribute(STYLE_ATTRIBUTE_NAME);
+	});
+	if (invalidElements) {
+		invalidElements.forEach((placeholderElement, element) => placeholderElement.replaceWith(element));
+	}
+}
+
+function markLinkStylesheets(doc, markedElements) {
+	const linkElements = Array.from(doc.querySelectorAll("link[rel*=stylesheet]"));
+	linkElements.forEach((linkElement, linkIndex) => {
+		linkElement.setAttribute(LINK_STYLESHEET_ATTRIBUTE_NAME, linkIndex);
+		markedElements.push(linkElement);
+	});
+	return linkElements;
+}
+
+function getSerializedCSSText(cssRule) {
+	return normalizeSerializedCSSText(cssRule.cssText);
+}
+
+function normalizeSerializedCSSText(cssText) {
+	return cssText.replace(REGEXP_INFINITE_FEATURE_VALUE, "$1$2" + MAX_FINITE_FEATURE_VALUE + "$3");
+}
+
+function getStylesheetsData(doc, markedElements) {
+	if (doc) {
+		const contents = [];
+		doc.querySelectorAll("style").forEach((styleElement, styleIndex) => {
+			try {
+				if (!styleElement.sheet.disabled) {
+					const tempStyleElement = doc.createElement("style");
+					tempStyleElement.textContent = styleElement.textContent;
+					doc.body.appendChild(tempStyleElement);
+					const stylesheet = tempStyleElement.sheet;
+					tempStyleElement.remove();
+					const textContentStylesheet = Array.from(stylesheet.cssRules).map(cssRule => cssRule.cssText).join("\n");
+					const sheetStylesheet = Array.from(styleElement.sheet.cssRules).map(cssRule => cssRule.cssText).join("\n");
+					if (!stylesheet || textContentStylesheet != sheetStylesheet) {
+						styleElement.setAttribute(STYLESHEET_ATTRIBUTE_NAME, styleIndex);
+						markedElements.push(styleElement);
+						contents[styleIndex] = Array.from(styleElement.sheet.cssRules).map(getSerializedCSSText).join("\n");
+					}
+				}
+				// eslint-disable-next-line no-unused-vars
+			} catch (error) {
+				// ignored
+			}
+		});
+		return contents;
+	}
+}
+
+function getSourceSize(win, pictureElement, currentSrc) {
+	if (currentSrc) {
+		const baseURI = pictureElement.ownerDocument.baseURI;
+		const sourceElement = Array.from(pictureElement.querySelectorAll(":scope > source")).find(sourceElement => {
+			const media = sourceElement.getAttribute("media");
+			return (!media || win.matchMedia(media).matches) && getSrcsetURLs(sourceElement.getAttribute("srcset"), baseURI).includes(currentSrc);
+		});
+		if (sourceElement && (sourceElement.hasAttribute("width") || sourceElement.hasAttribute("height"))) {
+			return {
+				width: sourceElement.getAttribute("width"),
+				height: sourceElement.getAttribute("height")
+			};
+		}
+	}
+}
+
+function getSrcsetURLs(srcset, baseURI) {
+	const urls = [];
+	if (srcset) {
+		try {
+			srcsetParser.process(srcset).forEach(candidate => {
+				try {
+					urls.push(new URL(candidate.url, baseURI).href);
+					// eslint-disable-next-line no-unused-vars
+				} catch (error) {
+					// ignored
+				}
+			});
+			// eslint-disable-next-line no-unused-vars
+		} catch (error) {
+			// ignored
+		}
+	}
+	return urls;
+}
+
+function getSize(win, imageElement, computedStyle) {
+	let pxWidth = imageElement.naturalWidth;
+	let pxHeight = imageElement.naturalHeight;
+	if (!pxWidth && !pxHeight) {
+		const noStyleAttribute = imageElement.getAttribute("style") == null;
+		computedStyle = computedStyle || getComputedStyle(win, imageElement);
+		if (computedStyle) {
+			let removeBorderWidth = false;
+			if (computedStyle.getPropertyValue("box-sizing") == "content-box") {
+				const boxSizingValue = imageElement.style.getPropertyValue("box-sizing");
+				const boxSizingPriority = imageElement.style.getPropertyPriority("box-sizing");
+				const clientWidth = imageElement.clientWidth;
+				imageElement.style.setProperty("box-sizing", "border-box", "important");
+				removeBorderWidth = imageElement.clientWidth != clientWidth;
+				if (boxSizingValue) {
+					imageElement.style.setProperty("box-sizing", boxSizingValue, boxSizingPriority);
+				} else {
+					imageElement.style.removeProperty("box-sizing");
+				}
+			}
+			let paddingLeft, paddingRight, paddingTop, paddingBottom, borderLeft, borderRight, borderTop, borderBottom;
+			paddingLeft = getWidth("padding-left", computedStyle);
+			paddingRight = getWidth("padding-right", computedStyle);
+			paddingTop = getWidth("padding-top", computedStyle);
+			paddingBottom = getWidth("padding-bottom", computedStyle);
+			if (removeBorderWidth) {
+				borderLeft = getWidth("border-left-width", computedStyle);
+				borderRight = getWidth("border-right-width", computedStyle);
+				borderTop = getWidth("border-top-width", computedStyle);
+				borderBottom = getWidth("border-bottom-width", computedStyle);
+			} else {
+				borderLeft = borderRight = borderTop = borderBottom = 0;
+			}
+			pxWidth = Math.max(0, imageElement.clientWidth - paddingLeft - paddingRight - borderLeft - borderRight);
+			pxHeight = Math.max(0, imageElement.clientHeight - paddingTop - paddingBottom - borderTop - borderBottom);
+			if (noStyleAttribute) {
+				imageElement.removeAttribute("style");
+			}
+		}
+	}
+	return { pxWidth, pxHeight };
+}
+
+function getWidth(styleName, computedStyle) {
+	if (computedStyle.getPropertyValue(styleName).endsWith("px")) {
+		return parseFloat(computedStyle.getPropertyValue(styleName));
+	}
+}
+
+function getFontsData() {
+	return hooksFrames.getFontsData();
+}
+
+function getWorkletsData() {
+	return hooksFrames.getWorkletsData();
+}
+
+function serialize(doc) {
+	const docType = doc.doctype;
+	let docTypeString = "";
+	if (docType) {
+		docTypeString = "<!DOCTYPE " + docType.nodeName;
+		if (docType.publicId) {
+			docTypeString += " PUBLIC \"" + docType.publicId + "\"";
+			if (docType.systemId) {
+				docTypeString += " \"" + docType.systemId + "\"";
+			}
+		} else if (docType.systemId) {
+			docTypeString += " SYSTEM \"" + docType.systemId + "\"";
+		} if (docType.internalSubset) {
+			docTypeString += " [" + docType.internalSubset + "]";
+		}
+		docTypeString += "> ";
+	}
+	return docTypeString + doc.documentElement.outerHTML;
+}
+
+function removeQuotes(string) {
+	if (string.match(REGEXP_SIMPLE_QUOTES_STRING)) {
+		string = string.replace(REGEXP_SIMPLE_QUOTES_STRING, "$1");
+	} else {
+		string = string.replace(REGEXP_DOUBLE_QUOTES_STRING, "$1");
+	}
+	return string.trim();
+}
+
+function getFontWeight(weight) {
+	return FONT_WEIGHTS[weight.toLowerCase().trim()] || weight;
+}
+
+function getFontStretch(stretch) {
+	return FONT_STRETCHES[stretch] || stretch;
+}
+
+function getStylesheetsInCascadeOrder(stylesheets) {
+	const entries = [];
+	const entriesByRules = new Map();
+	stylesheets.forEach((stylesheetInfo, key) => {
+		const entry = { stylesheetInfo, key, index: entries.length };
+		entries.push(entry);
+		if (stylesheetInfo.stylesheet && stylesheetInfo.stylesheet.children) {
+			entriesByRules.set(stylesheetInfo.stylesheet.children, entry);
+		}
+	});
+	const importedEntries = new Set();
+	entries.forEach(entry => getImportedStylesheetEntries(entry, entriesByRules).forEach(importedEntry => importedEntries.add(importedEntry)));
+	const orderedEntries = [];
+	const visitedEntries = new Set();
+	entries
+		.filter(entry => !importedEntries.has(entry))
+		.forEach(entry => addStylesheetEntry(entry, entriesByRules, orderedEntries, visitedEntries));
+	entries
+		.filter(entry => !visitedEntries.has(entry))
+		.forEach(entry => addStylesheetEntry(entry, entriesByRules, orderedEntries, visitedEntries));
+	return orderedEntries;
+}
+
+function addStylesheetEntry(entry, entriesByRules, orderedEntries, visitedEntries) {
+	if (!visitedEntries.has(entry)) {
+		visitedEntries.add(entry);
+		getImportedStylesheetEntries(entry, entriesByRules).forEach(importedEntry => addStylesheetEntry(importedEntry, entriesByRules, orderedEntries, visitedEntries));
+		orderedEntries.push(entry);
+	}
+}
+
+function getImportedStylesheetEntries(entry, entriesByRules) {
+	const importedEntries = [];
+	const stylesheet = entry.stylesheetInfo.stylesheet;
+	if (stylesheet && stylesheet.children) {
+		stylesheet.children.forEach(ruleData => {
+			if (ruleData.type == "Atrule" && ruleData.name == "import" && ruleData.prelude && ruleData.prelude.children && ruleData.prelude.children.head) {
+				const importedEntry = entriesByRules.get(ruleData.prelude.children.head.data.importedChildren);
+				if (importedEntry) {
+					importedEntries.push(importedEntry);
+				}
+			}
+		});
+	}
+	return importedEntries;
+}
+
+function getContentSize(content) {
+	return new Blob([content]).size;
+}
+
+async function getDataURI(blob) {
+	if (FileReader) {
+		const reader = new FileReader();
+		reader.readAsDataURL(blob);
+		return new Promise((resolve, reject) => {
+			reader.addEventListener("load", () => resolve(reader.result), false);
+			reader.addEventListener("error", reject, false);
+		});
+	} else {
+		const bytes = new Uint8Array(await blob.arrayBuffer());
+		let content = "";
+		for (let offset = 0; offset < bytes.length; offset += 8192) {
+			content += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+		}
+		return "data:" + (blob.type || "application/octet-stream") + ";base64," + btoa(content);
+	}
+}
+
+async function digest(algo, text) {
+	try {
+		const data = typeof text == "string" ? new TextEncoder("utf-8").encode(text) : text instanceof Uint8Array ? text : new Uint8Array(text);
+		const hash = globalThis.crypto && crypto.subtle ? await crypto.subtle.digest(algo, data) : sha.digest(algo, data);
+		return hex(hash);
+		// eslint-disable-next-line no-unused-vars
+	} catch (error) {
+		return "";
+	}
+}
+
+// https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/digest
+function hex(buffer) {
+	const hexCodes = [];
+	const view = new DataView(buffer);
+	for (let i = 0; i < view.byteLength; i += 4) {
+		const value = view.getUint32(i);
+		const stringValue = value.toString(16);
+		const padding = "00000000";
+		const paddedValue = (padding + stringValue).slice(-padding.length);
+		hexCodes.push(paddedValue);
+	}
+	return hexCodes.join("");
+}
+
+function flatten(array) {
+	return array.flat ? array.flat() : array.reduce((a, b) => a.concat(Array.isArray(b) ? flatten(b) : b), []);
+}
+
+function getVideoLinkOffset(doc, element, blockLevel) {
+	const offset = { top: 0, left: 0 };
+	if (element.parentNode) {
+		const probeElement = doc.createElement("a");
+		probeElement.style.setProperty("position", "absolute", "important");
+		probeElement.style.setProperty("margin", "0", "important");
+		probeElement.style.setProperty("padding", "0", "important");
+		probeElement.style.setProperty("border", "0", "important");
+		probeElement.style.setProperty("width", "0", "important");
+		probeElement.style.setProperty("height", "0", "important");
+		if (blockLevel) {
+			probeElement.style.setProperty("display", "block", "important");
+		}
+		element.insertAdjacentElement("beforebegin", probeElement);
+		const probeRect = probeElement.getBoundingClientRect();
+		const elementRect = element.getBoundingClientRect();
+		offset.top = Math.round(elementRect.top - probeRect.top);
+		offset.left = Math.round(elementRect.left - probeRect.left);
+		probeElement.remove();
+	}
+	return offset;
+}
+
+function getComputedStyle(win, element, pseudoElement) {
+	try {
+		return win.getComputedStyle(element, pseudoElement);
+		// eslint-disable-next-line no-unused-vars
+	} catch (error) {
+		// ignored
+	}
+}
+
+function parseDocContent(content, baseURI) {
+	const doc = (new DOMParser()).parseFromString(content, "text/html");
+	if (!doc.head) {
+		doc.documentElement.insertBefore(doc.createElement("HEAD"), doc.body);
+	}
+	let baseElement = doc.querySelector("base");
+	if (!baseElement || !baseElement.getAttribute("href")) {
+		if (baseElement) {
+			baseElement.remove();
+		}
+		baseElement = doc.createElement("base");
+		baseElement.setAttribute("href", baseURI);
+		doc.head.insertBefore(baseElement, doc.head.firstChild);
+	}
+	return doc;
+}

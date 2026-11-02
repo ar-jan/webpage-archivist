@@ -28,22 +28,29 @@ Connector removed the private iframe transport Archivist previously depended on.
 | Save records | `background/save-job-repo.js` | IndexedDB job metadata, temporary snapshot bytes and completion receipts |
 | Panel | `sidepanel/`, particularly `zotero-controller.js` | Link selection, queue controls, Connect Zotero, explicit destination and recovery feedback |
 | Link collection | `shared/link-collection.js`, `content/collector.js` | Direct panel-to-page script execution, document binding, bounded waits and local persistence |
-| Build | `scripts/build.mjs` | Pin and bundle SingleFile/SparkMD5; include source and license notices |
+| Build | `scripts/build.mjs` | Regenerate or verify committed SingleFile/SparkMD5 assets, source and notices |
 
-Run `npm ci && npm run build`, then load **`dist/`** unpacked. The source
-checkout is not a runnable extension. The build bundles the worker and its pinned
-SparkMD5 dependency together, produces both SingleFile capture scripts, and copies
-the panel modules, content collector, manifest and icons. It publishes the output
-only after all steps succeed. Generated files are ignored by Git. No executable
-dependency is downloaded at runtime. The complete directory includes the upstream
-source/license notices and Archivist source/build recipe in `source/`.
+Load the **repository root** unpacked immediately after cloning. Updates are
+`git pull` followed by Reload in Chromium, keeping the same checkout path. No
+Node/npm installation or build is required for users. Application modules run
+directly from source; the provider imports the checked-in `vendor/md5.js` module.
+Both SingleFile capture scripts are checked in, along with upstream source and
+license notices. No executable dependency is downloaded at runtime. `dist/` is
+no longer used or generated.
 
-`npm test` builds the package and includes a clean-source rebuild test: shipped
-source plus the lockfile dependencies must reproduce the runtime files without
-any repository-generated assets. Browser tests load the complete package and
-exercise worker registration/reload, native side-panel operations, and delayed
-initialization. See [dependency notices](../THIRD_PARTY_NOTICES.md) for SingleFile's
-AGPL dependency; Archivist's original source retains its MIT license.
+Maintainers run `npm ci && npm run build` to regenerate runtime assets after
+changing their inputs. The build stages all outputs before replacing generated
+files. Commit the assets together with changes to the snapshot adapter, build
+recipe or pinned dependencies. `npm run check:assets` builds into a temporary
+directory and compares every generated bundle, upstream source file and notice;
+it never repairs the checkout. `npm test` and CI run this check before tests.
+A clean-source rebuild test verifies reproducibility without existing assets and
+checks that missing/stale assets are rejected without modification. Browser tests
+load runtime files copied from the checkout without `node_modules` or `dist` and
+exercise worker registration/reload, retained storage, snapshot capture/checksums,
+native side-panel operations, and delayed initialization. See
+[dependency notices](../THIRD_PARTY_NOTICES.md) for SingleFile's AGPL dependency;
+Archivist's original source retains its MIT license.
 
 The panel owns local settings, selectors, collected links and selection. It reads
 one normalized snapshot directly through `shared/storage-repo.js`, then refreshes

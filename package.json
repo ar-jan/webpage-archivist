@@ -5,7 +5,8 @@
     "test": "node --test tests/*.mjs",
     "test:watch": "node --test --watch tests/*.mjs",
     "build": "node scripts/build.mjs",
-    "pretest": "npm run build"
+    "check:assets": "node scripts/build.mjs --check",
+    "pretest": "npm run check:assets"
   },
   "dependencies": {
     "single-file-core": "1.8.0",

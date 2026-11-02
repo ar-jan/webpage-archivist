@@ -1,0 +1,3 @@
+# Preserve reproducible bytes across checkouts, including with core.autocrlf.
+vendor/** -text -whitespace linguist-vendored
+content/snapshot.bundle.js* -text -whitespace linguist-generated
