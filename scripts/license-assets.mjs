@@ -24,7 +24,7 @@ export async function verifyThirdPartyInputs() {
 export function licenseBanner(outfile, singleFile) {
   return `/*! Webpage Archivist — ${singleFile ? "AGPL-3.0-or-later" : "SparkMD5 under MIT"}.
  * Copyright and license texts: ${path.basename(outfile)}.LEGAL.txt
- * Corresponding source, build instructions and dated changes: ../LICENSING.md
+ * License scope and corresponding source: ../LICENSING.md
  * Upstream source archives and provenance: ../third-party/README.md
  */`;
 }

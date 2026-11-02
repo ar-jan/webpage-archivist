@@ -1,4 +1,4 @@
-# License scope and modifications
+# License scope
 
 Copyright (c) 2026 Arjan Mossel and the respective third-party copyright holders.
 

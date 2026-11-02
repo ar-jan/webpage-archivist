@@ -1,6 +1,6 @@
 /*! Webpage Archivist — AGPL-3.0-or-later.
  * Copyright and license texts: snapshot.bundle.js.LEGAL.txt
- * Corresponding source, build instructions and dated changes: ../LICENSING.md
+ * License scope and corresponding source: ../LICENSING.md
  * Upstream source archives and provenance: ../third-party/README.md
  */
 (() => {

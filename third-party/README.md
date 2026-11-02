@@ -79,7 +79,7 @@ to the readable JavaScript embedded by SingleFile's ZIP build.
 Update the runtime version and lockfile, then audit the new upstream dependency
 tree, embedded notices and build inputs. Retrieve the corresponding source
 archives and license texts; record immutable revisions, URLs and hashes in
-`manifest.json`. Update the component inventory and dated modification record,
+`manifest.json`. Update the component inventory,
 rebuild the nested bundles to verify their sources, and run `npm run build` and
 `npm test`. Commit the source inputs, notices and generated outputs together.
 

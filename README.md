@@ -122,5 +122,5 @@ The combined extension is distributed under **AGPL-3.0-or-later**. Archivist's
 original source is also separately available under MIT; that grant does not
 relicense its third-party dependencies. The panel's **Licenses** link opens the
 license, warranty, attribution and source information locally. See
-[license scope and modifications](LICENSING.md) and
+[license scope](LICENSING.md) and
 [third-party source/rebuild instructions](third-party/README.md).

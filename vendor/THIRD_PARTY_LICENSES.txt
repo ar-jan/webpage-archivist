@@ -1,4 +1,4 @@
-# License scope and modifications
+# License scope
 
 Copyright (c) 2026 Arjan Mossel and the respective third-party copyright holders.
 
@@ -39,23 +39,6 @@ Keep these materials together when sharing the extension. Do not distribute just
 the three runtime bundles without their notices and access to the corresponding
 source. The generated `vendor/THIRD_PARTY_LICENSES.txt` and each bundle's
 `.LEGAL.txt` file include copyright notices, license texts and these directions.
-
-## Modification record
-
-- **2026-11-01 — Arjan Mossel / Webpage Archivist:** integrated SingleFile Core
-  1.8.0 with Archivist's snapshot adapter, bounded resource fetching and chunked
-  transfer; bundled the adapter and SingleFile for on-demand browser injection.
-  Wrapped SparkMD5 3.0.2 as a browser ES module for Zotero upload checksums.
-- **2026-11-02 — Arjan Mossel / Webpage Archivist:** corrected the adapter's
-  script-blocking option, committed browser-ready bundles for root installation,
-  and added explicit bundle attribution, third-party notices and source archives.
-  Added SparkMD5's upstream MIT license alternative to the vendored source copy.
-
-The installed SingleFile source is otherwise unmodified by Archivist. Upstream's
-patched CSS-tree build and customized ZIP builds are documented in the preserved
-SingleFile source archive, including `css-tree-build/` and `zip-build/`. Generated
-bundles transform/combine these sources; their entry points and transformations
-are recorded in `scripts/build.mjs`. Git history records subsequent changes.
 
 
 ----------------------------------------

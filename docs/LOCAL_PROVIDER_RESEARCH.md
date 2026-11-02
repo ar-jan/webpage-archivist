@@ -253,7 +253,7 @@ At the time of this investigation, dependency selection and the distribution
 license were still open. The implemented extension now uses
 [single-file-core][singlefile-core] and is distributed as a combined work under
 AGPL-3.0-or-later, with a separate MIT grant for original Archivist code. See
-[license scope and modifications](../LICENSING.md) and the
+[license scope](../LICENSING.md) and the
 [pinned source and rebuild instructions](../third-party/README.md) for the adopted
 licensing and vendoring arrangement.
 
