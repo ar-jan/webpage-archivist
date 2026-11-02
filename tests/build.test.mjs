@@ -21,12 +21,14 @@ test("runtime assets rebuild from clean source and freshness checks never repair
   const run = (...args) => execFileSync(process.execPath, ["scripts/build.mjs", ...args], { cwd: root, stdio: "pipe" });
   run();
   for (const file of ["vendor/md5.js", "content/snapshot.bundle.js", "vendor/single-file-hooks.js",
-    "vendor/SparkMD5-LICENSE", "vendor/SingleFile-LICENSE"]) {
+    "vendor/SparkMD5-LICENSE", "vendor/SingleFile-LICENSE", "vendor/THIRD_PARTY_LICENSES.txt",
+    "content/snapshot.bundle.js.LEGAL.txt", "vendor/md5.js.LEGAL.txt"]) {
     assert.deepEqual(await readFile(path.join(root, file)), await readFile(file), file);
   }
   run("--check");
   for (const file of ["vendor/md5.js", "content/snapshot.bundle.js", "vendor/single-file-hooks.js",
-    "vendor/SingleFile-LICENSE", "vendor/single-file-source/single-file.js"]) {
+    "vendor/SingleFile-LICENSE", "vendor/single-file-source/single-file.js",
+    "content/snapshot.bundle.js.LEGAL.txt", "vendor/THIRD_PARTY_LICENSES.txt"]) {
     const target = path.join(root, file);
     const original = await readFile(target);
     await writeFile(target, "stale fixture");
@@ -38,4 +40,8 @@ test("runtime assets rebuild from clean source and freshness checks never repair
   }
   await writeFile(path.join(root, "content/snapshot.js"), 'globalThis.staleCaptureFixture = true;\n', { flag: "a" });
   assert.throws(() => run("--check"), error => error.stderr.toString().includes("content/snapshot.bundle.js"));
+  const archive = path.join(root, "third-party/sources/single-file-core-1.8.0.tar.gz");
+  await writeFile(archive, "damaged source archive");
+  assert.throws(() => run("--check"), error => /Third-party input checksum mismatch/.test(error.stderr.toString()));
+  assert.equal(await readFile(archive, "utf8"), "damaged source archive");
 });

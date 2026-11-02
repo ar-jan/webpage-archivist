@@ -1,3 +1,8 @@
+/*! Webpage Archivist — AGPL-3.0-or-later.
+ * Copyright and license texts: snapshot.bundle.js.LEGAL.txt
+ * Corresponding source, build instructions and dated changes: ../LICENSING.md
+ * Upstream source archives and provenance: ../third-party/README.md
+ */
 (() => {
   var __defProp = Object.defineProperty;
   var __export = (target, all) => {

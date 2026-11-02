@@ -49,8 +49,14 @@ checks that missing/stale assets are rejected without modification. Browser test
 load runtime files copied from the checkout without `node_modules` or `dist` and
 exercise worker registration/reload, retained storage, snapshot capture/checksums,
 native side-panel operations, and delayed initialization. See
-[dependency notices](../THIRD_PARTY_NOTICES.md) for SingleFile's AGPL dependency;
-Archivist's original source retains its MIT license.
+[dependency notices](../THIRD_PARTY_NOTICES.md). The combined extension is
+distributed under AGPL-3.0-or-later; original Archivist code also retains a
+separate MIT grant. Supplemental source archives and nested build inputs in
+`third-party/` cover the CSS-tree/ZIP bundles omitted from SingleFile's npm source
+package. Builds verify their recorded hashes and generate explicit `.LEGAL.txt`
+sidecars with full license texts and ordinary upstream notice headers. A panel
+Licenses link provides local access to terms, attribution, warranty information
+and source directions. See [license scope](../LICENSING.md).
 
 The panel owns local settings, selectors, collected links and selection. It reads
 one normalized snapshot directly through `shared/storage-repo.js`, then refreshes

@@ -6,7 +6,7 @@ import path from "node:path";
 export async function copyExtension(destination) {
   await mkdir(destination, { recursive: true });
   for (const entry of ["background", "content", "icons", "shared", "sidepanel", "zotero", "vendor",
-    "manifest.json", "LICENSE", "THIRD_PARTY_NOTICES.md"]) {
+    "manifest.json", "LICENSE", "LICENSE-MIT", "LICENSING.md", "THIRD_PARTY_NOTICES.md", "third-party"]) {
     await cp(entry, path.join(destination, entry), { recursive: true });
   }
   for (const entry of ["node_modules", "dist"]) {

@@ -69,6 +69,26 @@ try {
 
   const retired = await panel.evaluate(() => chrome.runtime.sendMessage({ type: "COLLECT_LINKS" }));
   assert.equal(retired.error.code, "BAD_REQUEST");
+  await panel.setViewportSize({ width: 420, height: 900 });
+  await panel.screenshot({ path: path.join(root, "panel-licenses.png") });
+  const popup = context.waitForEvent("page");
+  await panel.getByRole("link", { name: "Licenses", exact: true }).click();
+  const licenses = await popup;
+  await licenses.getByRole("heading", { name: "Webpage Archivist licenses" }).waitFor();
+  assert.match(await licenses.locator("body").textContent(), /There is no warranty/);
+  const documents = await licenses.evaluate(async () => Promise.all(
+    [...document.querySelectorAll('a[href^="../"]')].map(async link => {
+      const response = await fetch(link.href);
+      return { url: link.href, ok: response.ok, length: (await response.text()).length };
+    })
+  ));
+  assert.ok(documents.length >= 4);
+  assert.ok(documents.every(document => document.ok && document.length > 0), JSON.stringify(documents));
+  await licenses.screenshot({ path: path.join(root, "licenses.png"), fullPage: true });
+  await licenses.getByRole("link", { name: "Full license texts and copyright notices" }).click();
+  await licenses.waitForURL("**/vendor/THIRD_PARTY_LICENSES.txt");
+  assert.match(await licenses.locator("body").textContent(), /Arjun Barrett/);
+  await licenses.close();
   // Startup alone missed absent snapshot bundles in the previous vendoring fix.
   const fixture = await context.newPage();
   await fixture.goto("https://startup-fixture.test/");
@@ -90,7 +110,7 @@ try {
   assert.equal(snapshot.md5, createHash("md5").update(snapshot.html).digest("hex"));
   assert.deepEqual(snapshot.warnings, []);
   console.log(JSON.stringify({ root, checkoutStartup: true, reloadPreservesStorage: true, workerCommands: true,
-    retiredRouteRejected: true, snapshotCapture: true, checksum: true }));
+    retiredRouteRejected: true, snapshotCapture: true, checksum: true, localLicenses: true }));
 
 } finally {
   await context.close();

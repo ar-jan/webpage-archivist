@@ -18,6 +18,8 @@
 - `npm run check:assets`: verify committed assets against a temporary fresh build without modifying the checkout.
 - For manual validation, load the repository root in Chromium via `chrome://extensions` -> **Developer mode** -> **Load unpacked**. Installation needs no npm/build step; updates are `git pull` then **Reload**, using the same checkout path.
 - `vendor/` and `content/snapshot.bundle.js*` are generated and tracked. Do not edit them by hand or rebuild them automatically before freshness checks.
+- `third-party/` holds pinned source archives, imported license texts and provenance. Dependency upgrades must review/update these inputs, the component inventory and dated modification record before regenerating assets.
+- The combined extension is AGPL-3.0-or-later; original Archivist source also has a separate MIT grant. Preserve both scopes and the panel's local license/source access.
 
 ## Coding Style & Naming Conventions
 - Language/runtime: modern JavaScript ES modules (`import`/`export`), MV3 service worker.

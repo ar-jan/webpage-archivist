@@ -1,3 +1,9 @@
 # Preserve reproducible bytes across checkouts, including with core.autocrlf.
 vendor/** -text -whitespace linguist-vendored
 content/snapshot.bundle.js* -text -whitespace linguist-generated
+third-party/sources/** -text linguist-vendored
+third-party/licenses/** -text -whitespace linguist-vendored
+LICENSE -text
+LICENSE-MIT -text
+LICENSING.md text eol=lf
+THIRD_PARTY_NOTICES.md text eol=lf

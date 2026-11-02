@@ -1,24 +1,33 @@
 import { build } from "esbuild";
 import { copyFile, cp, mkdir, mkdtemp, readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
+import { licenseBanner, verifyThirdPartyInputs, writeLicenseNotices } from "./license-assets.mjs";
 
 const check = process.argv.includes("--check");
 const snapshotFiles = ["content/snapshot.bundle.js", "content/snapshot.bundle.js.LEGAL.txt"];
+const thirdParty = await verifyThirdPartyInputs();
 // Build in isolation so checks cannot silently repair stale committed assets.
 const stage = await mkdtemp(path.resolve(".runtime-build-"));
 try {
-  const bundle = (entry, outfile, format, legalComments = "linked") => build({
-    entryPoints: [entry], bundle: true, format, target: "chrome120", preserveSymlinks: true,
-    outfile: path.join(stage, outfile), legalComments,
-  });
+  const inputs = new Set();
+  const bundle = async (entry, outfile, format, singleFile = true) => {
+    const result = await build({
+      entryPoints: [entry], bundle: true, format, target: "chrome120", preserveSymlinks: true,
+      outfile: path.join(stage, outfile), legalComments: "linked", metafile: true,
+      banner: { js: licenseBanner(outfile, singleFile) },
+    });
+    for (const file of Object.keys(result.metafile.inputs)) inputs.add(file);
+  };
   await bundle("content/snapshot.js", "content/snapshot.bundle.js", "iife");
   await bundle("node_modules/single-file-core/single-file-hooks-frames.js", "vendor/single-file-hooks.js", "iife");
-  await bundle("node_modules/spark-md5/spark-md5.js", "vendor/md5.js", "esm", "inline");
+  await bundle("node_modules/spark-md5/spark-md5.js", "vendor/md5.js", "esm", false);
   await copyFile("node_modules/single-file-core/LICENSE", path.join(stage, "vendor/SingleFile-LICENSE"));
-  await copyFile("node_modules/spark-md5/LICENSE", path.join(stage, "vendor/SparkMD5-LICENSE"));
+  await copyFile("third-party/licenses/spark-md5-MIT.txt", path.join(stage, "vendor/SparkMD5-LICENSE"));
   // Keep upstream source and embedded notices alongside the browser bundles.
   await cp("node_modules/single-file-core", path.join(stage, "vendor/single-file-source"), { recursive: true });
   await cp("node_modules/spark-md5", path.join(stage, "vendor/spark-md5-source"), { recursive: true });
+  await copyFile("third-party/licenses/spark-md5-MIT.txt", path.join(stage, "vendor/spark-md5-source/LICENSE2"));
+  await writeLicenseNotices(stage, thirdParty, inputs);
 
   if (check) {
     const files = new Set([

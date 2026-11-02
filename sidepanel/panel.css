@@ -796,6 +796,12 @@ body {
   color: var(--text-secondary);
 }
 
+.licenses-link {
+  color: var(--text-secondary);
+  margin-right: var(--space-sm);
+  text-underline-offset: 2px;
+}
+
 .spacer {
   flex: 1;
 }

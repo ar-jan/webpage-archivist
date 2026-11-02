@@ -1,0 +1,29 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #202124;
+  background: #fafafa;
+  line-height: 1.6;
+}
+
+body {
+  margin: 0;
+  padding: 24px;
+}
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+h1, h2 {
+  line-height: 1.25;
+}
+
+a {
+  color: #2456a6;
+  text-underline-offset: 3px;
+}
+
+li {
+  margin: 8px 0;
+}

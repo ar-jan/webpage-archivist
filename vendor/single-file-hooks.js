@@ -1,3 +1,8 @@
+/*! Webpage Archivist — AGPL-3.0-or-later.
+ * Copyright and license texts: single-file-hooks.js.LEGAL.txt
+ * Corresponding source, build instructions and dated changes: ../LICENSING.md
+ * Upstream source archives and provenance: ../third-party/README.md
+ */
 (() => {
   // node_modules/single-file-core/processors/hooks/content/content-hooks-frames-web.js
   (() => {
