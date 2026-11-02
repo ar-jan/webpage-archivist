@@ -1,8 +1,9 @@
+⚠️ This project is >95% AI-generated. It works for me, YMMV.
+
 # Webpage Archivist
 
 A Chromium extension that collects links and archives selected pages directly to
-Zotero Desktop as webpage items with HTML snapshots. The browser Zotero Connector
-is not required.
+Zotero Desktop as webpage items with HTML snapshots.
 
 ## Install and connect
 
