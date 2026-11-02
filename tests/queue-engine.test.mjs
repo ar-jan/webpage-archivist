@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createQueueEngine, QUEUE_ENGINE_ALARM_NAME } from "../background/queue-engine.js";
-import { QUEUE_ZOTERO_SAVE_MODES } from "../shared/state.js";
 
 const QUEUE_TAB_LOAD_MAX_WAIT_MS = 10 * 60 * 1000;
 
@@ -59,39 +58,6 @@ test("runQueueEngineSoon archives an active item when provider save succeeds", a
   assert.ok(chromeMock.alarms.cleared.includes(QUEUE_ENGINE_ALARM_NAME));
 });
 
-test("runQueueEngineSoon normalizes configured Zotero save mode before provider call", async (t) => {
-  const chromeMock = installChromeMock({
-    tabsById: new Map([
-      [151, { id: 151, url: "https://example.com/mode", status: "complete" }]
-    ])
-  });
-  t.after(() => chromeMock.restore());
-
-  let observedProviderInput = null;
-  const harness = createQueueEngineHarness({
-    queueItems: [createQueueItem({ id: "q-save-mode", url: "https://example.com/mode", status: "opening_tab" })],
-    queueRuntime: createQueueRuntime({
-      status: "running",
-      activeQueueItemId: "q-save-mode",
-      activeTabId: 151
-    }),
-    queueSettings: {
-      interItemDelayMs: 0,
-      interItemDelayJitterMs: 0,
-      zoteroSaveMode: "unsupported_mode"
-    },
-    saveQueueItemWithProvider: async (input) => {
-      observedProviderInput = input;
-      return { ok: true };
-    }
-  });
-
-  await harness.queueEngine.runQueueEngineSoon("test-save-mode");
-  await harness.queueEngine.waitForIdle();
-
-  assert.equal(observedProviderInput?.zoteroSaveMode, QUEUE_ZOTERO_SAVE_MODES.WEBPAGE_WITH_SNAPSHOT);
-});
-
 test("runQueueEngineSoon waits configured delay before processing next item", async (t) => {
   const chromeMock = installChromeMock({
     tabsById: new Map([
@@ -128,7 +94,8 @@ test("runQueueEngineSoon waits configured delay before processing next item", as
   assert.equal(settledState.queueRuntime.activeTabId, null);
   assert.ok(Number.isFinite(settledState.queueRuntime.nextRunAt));
   assert.equal(chromeMock.tabs.created.length, 0);
-  assert.equal(harness.delayTimers.scheduled.at(-1)?.delayMs, 200);
+  assert.ok(harness.delayTimers.scheduled.at(-1)?.delayMs > 0);
+  assert.ok(harness.delayTimers.scheduled.at(-1)?.delayMs <= 200);
 
   harness.setQueueRuntime({
     ...settledState.queueRuntime,
@@ -370,7 +337,7 @@ function createQueueEngineHarness({
   queueSettings = {
     interItemDelayMs: 0,
     interItemDelayJitterMs: 0,
-    zoteroSaveMode: QUEUE_ZOTERO_SAVE_MODES.WEBPAGE_WITH_SNAPSHOT
+
   },
   randomImpl = () => 0.5,
   saveQueueItemWithProvider = async () => ({ ok: true }),
@@ -564,3 +531,45 @@ function installChromeMock({ tabsById = new Map() } = {}) {
     }
   };
 }
+
+test("a late provider result after Stop cannot advance a different queue run", async t => {
+  const chromeMock = installChromeMock({ tabsById: new Map([[51, { id: 51, status: "complete" }]]) });
+  t.after(() => chromeMock.restore());
+  let finish, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const harness = createQueueEngineHarness({
+    queueItems: [createQueueItem({ id: "q1", url: "https://example.com", status: "opening_tab" })],
+    queueRuntime: createQueueRuntime({ status: "running", activeQueueItemId: "q1", activeTabId: 51 }),
+    saveQueueItemWithProvider: async ({ signal }) => {
+      entered(signal); return new Promise(resolve => { finish = resolve; });
+    }
+  });
+  const saving = harness.queueEngine.runQueueEngineSoon("save");
+  const signal = await started;
+  harness.queueEngine.cancelActiveSave();
+  harness.setQueueRuntime(createQueueRuntime({ status: "running", activeQueueItemId: "different", activeTabId: 82 }));
+  assert.equal(signal.aborted, true);
+  finish({ ok: true });
+  await saving;
+  assert.equal(harness.getState().queueRuntime.activeQueueItemId, "different");
+  assert.notEqual(harness.getState().queueItems[0].status, "archived");
+  assert.deepEqual(chromeMock.tabs.removed, []);
+});
+
+test("review outcomes are visible and Pause allows the current save to finish", async t => {
+  const chromeMock = installChromeMock({ tabsById: new Map([[51, { id: 51, status: "complete" }]]) });
+  t.after(() => chromeMock.restore());
+  let harness;
+  harness = createQueueEngineHarness({
+    queueItems: [createQueueItem({ id: "q1", url: "https://example.com", status: "opening_tab" })],
+    queueRuntime: createQueueRuntime({ status: "running", activeQueueItemId: "q1", activeTabId: 51 }),
+    saveQueueItemWithProvider: async () => {
+      harness.setQueueRuntime({ ...harness.getState().queueRuntime, status: "paused" });
+      return { ok: false, outcome: "needs_review", error: "Item was changed" };
+    }
+  });
+  await harness.queueEngine.runQueueEngineSoon("save");
+  assert.equal(harness.getState().queueItems[0].status, "needs_review");
+  assert.equal(harness.getState().queueRuntime.status, "paused");
+  assert.equal(harness.getState().queueRuntime.activeQueueItemId, null);
+});

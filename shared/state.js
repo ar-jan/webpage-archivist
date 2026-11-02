@@ -6,6 +6,7 @@ export const QUEUE_ITEM_STATUSES = Object.freeze([
   "saving_snapshot",
   "archived",
   "failed",
+  "needs_review",
   "cancelled"
 ]);
 
@@ -19,11 +20,7 @@ export const DEFAULT_COLLECTOR_SETTINGS = Object.freeze({
 });
 export const DEFAULT_QUEUE_SETTINGS = Object.freeze({
   interItemDelayMs: 5000,
-  interItemDelayJitterMs: 2000,
-  zoteroSaveMode: "webpage_with_snapshot"
-});
-export const QUEUE_ZOTERO_SAVE_MODES = Object.freeze({
-  WEBPAGE_WITH_SNAPSHOT: "webpage_with_snapshot"
+  interItemDelayJitterMs: 2000
 });
 
 const QUEUE_ITEM_STATUS_SET = new Set(QUEUE_ITEM_STATUSES);
@@ -140,11 +137,9 @@ export function normalizeQueueSettings(input) {
 
   const interItemDelayMs = normalizeQueueInterItemDelayMs(input.interItemDelayMs);
   const interItemDelayJitterMs = normalizeQueueInterItemJitterMs(input.interItemDelayJitterMs);
-  const zoteroSaveMode = normalizeQueueZoteroSaveMode(input.zoteroSaveMode);
   return {
     interItemDelayMs,
-    interItemDelayJitterMs,
-    zoteroSaveMode
+    interItemDelayJitterMs
   };
 }
 
@@ -217,6 +212,8 @@ export function normalizeQueueItems(input) {
       queueItem.lastError = candidate.lastError.trim();
     }
 
+    if (isHttpUrl(candidate.permissionUrl)) queueItem.permissionUrl = candidate.permissionUrl;
+    if (Array.isArray(candidate.warnings)) queueItem.warnings = candidate.warnings.filter(value => typeof value === "string").slice(0, 10);
     normalized.push(queueItem);
   }
 
@@ -314,12 +311,14 @@ export function getQueueItemCounts(queueItems) {
   const pendingCount = safeQueueItems.filter((item) => item.status === "pending").length;
   const archivedCount = safeQueueItems.filter((item) => item.status === "archived").length;
   const failedCount = safeQueueItems.filter((item) => item.status === "failed").length;
+  const reviewCount = safeQueueItems.filter((item) => item.status === "needs_review").length;
   const cancelledCount = safeQueueItems.filter((item) => item.status === "cancelled").length;
   return {
     pendingCount,
     archivedCount,
     failedCount,
     cancelledCount,
+    reviewCount,
     retriableCount: failedCount + cancelledCount
   };
 }
@@ -422,12 +421,4 @@ function normalizeQueueInterItemJitterMs(value) {
     return QUEUE_INTER_ITEM_JITTER_MAX_MS;
   }
   return truncated;
-}
-
-function normalizeQueueZoteroSaveMode(value) {
-  if (typeof value === "string" && value === QUEUE_ZOTERO_SAVE_MODES.WEBPAGE_WITH_SNAPSHOT) {
-    return value;
-  }
-
-  return DEFAULT_QUEUE_SETTINGS.zoteroSaveMode;
 }

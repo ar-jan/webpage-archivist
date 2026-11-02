@@ -1,17 +1,33 @@
-import { MESSAGE_TYPES, toOriginPattern } from "../shared/protocol.js";
+import {
+  ERROR_CODES,
+  MESSAGE_TYPES,
+  createError,
+  createSuccess,
+  sanitizeSelectorRules,
+  toOriginPattern
+} from "../shared/protocol.js";
+import { collectLinksFromTab } from "../shared/link-collection.js";
+import { withTimeout } from "../shared/async.js";
+import { readPanelState, saveCollectedLinks, saveQueueSettings, saveSelectorRules, saveProviderDiagnostics } from "../shared/storage-repo.js";
+import { readLocalDiagnostics } from "../zotero/diagnostics.js";
 
 export async function getPanelStateAction() {
-  return sendRuntimeMessage(MESSAGE_TYPES.GET_PANEL_STATE);
+  return createSuccess(await withTimeout(readPanelState(), 5000, "Reading local settings timed out. Reopen the panel to retry."));
 }
 
-export async function collectLinksAction() {
-  return sendRuntimeMessage(MESSAGE_TYPES.COLLECT_LINKS);
+export async function refreshDiagnosticsAction() {
+  const diagnostics = await readLocalDiagnostics();
+  await saveProviderDiagnostics(diagnostics);
+  return diagnostics;
+}
+
+export async function collectLinksAction(tab) {
+  return collectLinksFromTab(tab);
 }
 
 export async function setCollectedLinksAction(links) {
-  return sendRuntimeMessage(MESSAGE_TYPES.SET_COLLECTED_LINKS, {
-    links
-  });
+  const saved = await withTimeout(saveCollectedLinks(links), 5000, "Saving link selection timed out. Check the saved selection before retrying.");
+  return createSuccess({ links: saved });
 }
 
 export async function authorQueueFromSelectionAction(links) {
@@ -21,9 +37,8 @@ export async function authorQueueFromSelectionAction(links) {
 }
 
 export async function setQueueSettingsAction(queueSettings) {
-  return sendRuntimeMessage(MESSAGE_TYPES.SET_QUEUE_SETTINGS, {
-    queueSettings
-  });
+  const saved = await withTimeout(saveQueueSettings(queueSettings), 5000, "Saving queue settings timed out. Check the settings before retrying.");
+  return createSuccess({ queueSettings: saved });
 }
 
 export async function clearQueueAction() {
@@ -39,9 +54,15 @@ export async function queueLifecycleAction(messageType, payload = undefined) {
 }
 
 export async function setSelectorRulesAction(rules) {
-  return sendRuntimeMessage(MESSAGE_TYPES.SET_SELECTOR_RULES, {
-    rules
-  });
+  const selectorRules = sanitizeSelectorRules(rules);
+  if (!Array.isArray(rules) || selectorRules.length === 0 || selectorRules.length !== rules.length) {
+    return createError(ERROR_CODES.INVALID_SELECTOR_RULES, "One or more selector rules are invalid.");
+  }
+
+  // The panel is a trusted extension context. Persist this local setting directly
+  // rather than waiting for a service-worker message channel to acknowledge it.
+  await saveSelectorRules(selectorRules);
+  return createSuccess({ selectorRules });
 }
 
 export async function getActiveTabAction() {
@@ -113,9 +134,14 @@ export async function ensureHostPermissionsForUrlsAction(urls) {
   };
 }
 
-async function sendRuntimeMessage(type, payload = undefined) {
+export async function sendRuntimeMessage(type, payload = undefined, { timeoutMs = 45000 } = {}) {
   const message = payload === undefined ? { type } : { type, payload };
-  return chrome.runtime.sendMessage(message);
+  try {
+    return await withTimeout(chrome.runtime.sendMessage(message), timeoutMs,
+      "The background worker did not reply. The command may still complete; check queue status before retrying. If it remains unavailable, reload Archivist and check its extension errors.");
+  } catch (error) {
+    return createError(ERROR_CODES.INTERNAL_ERROR, error.message || "The background worker is unavailable. Reload Archivist and check its extension errors.");
+  }
 }
 
 function collectOriginPatterns(urls) {

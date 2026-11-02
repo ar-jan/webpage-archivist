@@ -1,30 +1,43 @@
 import {
-  ANCHOR_SELECTOR_RULE_ID,
   DEFAULT_SELECTOR_RULES,
   STORAGE_KEYS,
   sanitizeSelectorRules
-} from "../shared/protocol.js";
+} from "./protocol.js";
 import {
   normalizeCollectorSettings,
   normalizeCollectedLinks,
   normalizeQueueItems,
   normalizeQueueSettings,
   normalizeQueueRuntime
-} from "../shared/state.js";
+} from "./state.js";
 import { normalizeProviderDiagnostics } from "../zotero/provider-interface.js";
 
-export async function getCollectedLinks() {
-  const stored = await chrome.storage.local.get(STORAGE_KEYS.COLLECTED_LINKS);
-  const collectedLinks = normalizeCollectedLinks(stored[STORAGE_KEYS.COLLECTED_LINKS]);
-  if (!Array.isArray(stored[STORAGE_KEYS.COLLECTED_LINKS])) {
-    await saveCollectedLinks(collectedLinks);
-  }
-  return collectedLinks;
+// A panel snapshot is one read with no write-back and no network or worker wait.
+export async function readPanelState() {
+  const stored = await chrome.storage.local.get(Object.values(STORAGE_KEYS));
+  const rules = sanitizeSelectorRules(stored[STORAGE_KEYS.SELECTOR_RULES]);
+  return {
+    selectorRules: rules.length ? rules : DEFAULT_SELECTOR_RULES.map(rule => ({ ...rule })),
+    collectedLinks: normalizeCollectedLinks(stored[STORAGE_KEYS.COLLECTED_LINKS]),
+    queueSettings: normalizeQueueSettings(stored[STORAGE_KEYS.QUEUE_SETTINGS]),
+    queueItems: normalizeQueueItems(stored[STORAGE_KEYS.QUEUE_ITEMS]),
+    queueRuntime: normalizeQueueRuntime(stored[STORAGE_KEYS.QUEUE_RUNTIME]),
+    providerDiagnostics: normalizeProviderDiagnostics(stored[STORAGE_KEYS.PROVIDER_DIAGNOSTICS])
+  };
 }
 
-export async function saveCollectedLinks(links) {
+export async function readCollectionSettings(chromeImpl = globalThis.chrome) {
+  const stored = await chromeImpl.storage.local.get([STORAGE_KEYS.SELECTOR_RULES, STORAGE_KEYS.COLLECTOR_SETTINGS]);
+  const rules = sanitizeSelectorRules(stored[STORAGE_KEYS.SELECTOR_RULES]);
+  return {
+    rules: rules.length ? rules : DEFAULT_SELECTOR_RULES.map(rule => ({ ...rule })),
+    settings: normalizeCollectorSettings(stored[STORAGE_KEYS.COLLECTOR_SETTINGS])
+  };
+}
+
+export async function saveCollectedLinks(links, chromeImpl = globalThis.chrome) {
   const normalized = normalizeCollectedLinks(links);
-  await chrome.storage.local.set({
+  await chromeImpl.storage.local.set({
     [STORAGE_KEYS.COLLECTED_LINKS]: normalized
   });
   return normalized;
@@ -90,11 +103,6 @@ export async function getSelectorRules() {
   const defaults = DEFAULT_SELECTOR_RULES.map((rule) => ({ ...rule }));
 
   if (sanitizedRules.length === 0) {
-    await chrome.storage.local.set({ [STORAGE_KEYS.SELECTOR_RULES]: defaults });
-    return defaults;
-  }
-
-  if (isLegacyAnchorOnlyDefault(sanitizedRules)) {
     await chrome.storage.local.set({ [STORAGE_KEYS.SELECTOR_RULES]: defaults });
     return defaults;
   }
@@ -198,24 +206,4 @@ export async function saveQueueRuntime(queueRuntime) {
 
 export async function ensureQueueRuntime() {
   await getQueueRuntime();
-}
-
-function isLegacyAnchorOnlyDefault(rules) {
-  if (!Array.isArray(rules) || rules.length !== 1) {
-    return false;
-  }
-
-  const rule = rules[0];
-  if (!rule || typeof rule !== "object") {
-    return false;
-  }
-
-  const normalizedName = typeof rule.name === "string" ? rule.name.trim().toLowerCase() : "";
-  return (
-    rule.id === ANCHOR_SELECTOR_RULE_ID &&
-    rule.cssSelector === "a[href]" &&
-    rule.urlAttribute === "href" &&
-    rule.enabled === true &&
-    (normalizedName === "all anchor links" || normalizedName === "anchors")
-  );
 }

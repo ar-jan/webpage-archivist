@@ -1,0 +1,24 @@
+name: Test
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Checks committed assets without regenerating them before testing.
+      - run: npm test
+      - run: npm exec -- playwright-core install --with-deps chromium
+      - name: Verify checkout startup, reload, and snapshot capture
+        run: |
+          export ARCHIVIST_TEST_CHROMIUM="$(node --input-type=module -e 'import { chromium } from "playwright-core"; console.log(chromium.executablePath())')"
+          node tests/integration/worker-startup.mjs

@@ -1,89 +1,17 @@
 import { SAVE_PROVIDER_MODES } from "../shared/protocol.js";
 
 export function createDefaultProviderDiagnostics() {
-  return {
-    activeMode: SAVE_PROVIDER_MODES.CONNECTOR_BRIDGE,
-    connectorBridge: {
-      enabled: true,
-      healthy: false,
-      bridgeReady: null,
-      connectorAvailable: null,
-      zoteroOnline: null
-    },
-    lastError: null,
-    updatedAt: Date.now()
-  };
+  return { activeMode: SAVE_PROVIDER_MODES.LOCAL_ZOTERO, permissionGranted: false,
+    reachable: false, authorized: false, destinationReady: false, clientVersion: null,
+    targetLabel: null, lastError: null, updatedAt: Date.now() };
 }
 
 export function normalizeProviderDiagnostics(input) {
-  const defaults = createDefaultProviderDiagnostics();
-  if (!input || typeof input !== "object") {
-    return defaults;
+  const result = createDefaultProviderDiagnostics();
+  for (const key of ["permissionGranted", "reachable", "authorized", "destinationReady"]) result[key] = input?.[key] === true;
+  for (const key of ["clientVersion", "targetLabel", "lastError"]) {
+    result[key] = typeof input?.[key] === "string" && input[key].trim() ? input[key].trim() : null;
   }
-
-  const activeMode =
-    typeof input.activeMode === "string" &&
-    input.activeMode === SAVE_PROVIDER_MODES.CONNECTOR_BRIDGE
-      ? input.activeMode
-      : defaults.activeMode;
-
-  const connectorBridge = normalizeConnectorBridgeDiagnostics(input.connectorBridge);
-  const lastError =
-    typeof input.lastError === "string" && input.lastError.trim().length > 0
-      ? input.lastError.trim()
-      : null;
-  const updatedAt =
-    Number.isFinite(input.updatedAt) && input.updatedAt > 0
-      ? Math.trunc(input.updatedAt)
-      : Date.now();
-
-  return {
-    activeMode,
-    connectorBridge,
-    lastError,
-    updatedAt
-  };
-}
-
-export function createProviderSaveSuccess() {
-  return {
-    ok: true
-  };
-}
-
-export function createProviderSaveError(error) {
-  return {
-    ok: false,
-    error
-  };
-}
-
-function normalizeConnectorBridgeDiagnostics(input) {
-  if (!input || typeof input !== "object") {
-    return {
-      enabled: true,
-      healthy: false,
-      bridgeReady: null,
-      connectorAvailable: null,
-      zoteroOnline: null
-    };
-  }
-
-  return {
-    enabled: true,
-    healthy: input.healthy === true,
-    bridgeReady: normalizeNullableBoolean(input.bridgeReady),
-    connectorAvailable: normalizeNullableBoolean(input.connectorAvailable),
-    zoteroOnline: normalizeNullableBoolean(input.zoteroOnline)
-  };
-}
-
-function normalizeNullableBoolean(value) {
-  if (value === true) {
-    return true;
-  }
-  if (value === false) {
-    return false;
-  }
-  return null;
+  if (Number.isFinite(input?.updatedAt) && input.updatedAt > 0) result.updatedAt = Math.trunc(input.updatedAt);
+  return result;
 }

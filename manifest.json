@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Webpage Archivist",
-  "description": "Collect links from the active page for Zotero archival workflows.",
-  "version": "0.0.1",
+  "description": "Collect links and archive pages with HTML snapshots directly to Zotero Desktop.",
+  "version": "0.1.0",
   "permissions": [
     "storage",
     "alarms",
@@ -35,5 +35,6 @@
   },
   "side_panel": {
     "default_path": "sidepanel/panel.html"
-  }
+  },
+  "minimum_chrome_version": "120"
 }

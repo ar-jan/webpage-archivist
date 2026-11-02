@@ -2,19 +2,24 @@
 
 ## Project Structure & Module Organization
 - `manifest.json`: MV3 extension entrypoint and permission model.
-- `background/`: service-worker runtime (`message-router`, queue engine/lifecycle, storage repo, provider orchestration).
+- `background/`: service-worker runtime (`message-router`, queue engine/lifecycle, provider orchestration).
 - `sidepanel/`: panel UI (`panel.html/css/js`) plus focused controllers and store/render modules.
 - `content/collector.js`: on-demand page link collection logic.
-- `shared/`: cross-surface contracts and state normalization utilities.
-- `zotero/`: provider interface and connector bridge implementation.
+- `shared/`: cross-surface contracts, storage repository, state normalization and timeout utilities.
+- `zotero/`: authenticated local Zotero API client, settings, and provider.
 - `tests/`: module-level `node:test` suites and `tests/test-helpers/` mocks.
 - `docs/`: architecture and design notes for extension behavior and constraints.
 
 ## Build, Test, and Development Commands
 - `npm install`: install local Node dependencies.
-- `npm test`: run all tests (`node --test tests/*.mjs`).
+- `npm test`: check committed runtime assets, then run all tests (`node --test tests/*.mjs`).
 - `npm run test:watch`: rerun tests on file changes.
-- No bundling/build step is configured. For manual validation, load the repo root in Chromium via `chrome://extensions` -> **Developer mode** -> **Load unpacked**.
+- `npm run build`: regenerate committed snapshot/checksum bundles and upstream source/notices after changing their inputs; commit those outputs with the source changes.
+- `npm run check:assets`: verify committed assets against a temporary fresh build without modifying the checkout.
+- For manual validation, load the repository root in Chromium via `chrome://extensions` -> **Developer mode** -> **Load unpacked**. Installation needs no npm/build step; updates are `git pull` then **Reload**, using the same checkout path.
+- `vendor/` and `content/snapshot.bundle.js*` are generated and tracked. Do not edit them by hand or rebuild them automatically before freshness checks.
+- `third-party/` holds pinned source archives, imported license texts and provenance. Dependency upgrades must review/update these inputs and the component inventory before regenerating assets.
+- The combined extension is AGPL-3.0-or-later; original Archivist source also has a separate MIT grant. Preserve both scopes and the panel's local license/source access.
 
 ## Coding Style & Naming Conventions
 - Language/runtime: modern JavaScript ES modules (`import`/`export`), MV3 service worker.
@@ -26,7 +31,7 @@
 ## Testing Guidelines
 - Framework: Node built-in `node:test` with `node:assert/strict`.
 - Test files: `tests/*.test.mjs` (one module/feature area per file).
-- Prefer deterministic mocks from `tests/test-helpers/` for Chrome/Zotero bridge behaviors.
+- Prefer deterministic mocks from `tests/test-helpers/` for Chrome/Zotero API behaviors.
 - When changing queue, routing, or provider code, add/adjust tests for state transitions, message contracts, and failure paths.
 - Run `npm test` before opening a PR.
 

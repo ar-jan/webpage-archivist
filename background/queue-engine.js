@@ -25,6 +25,8 @@ export function createQueueEngine({
   clearQueueEngineDelayTimerImpl = (timerId) => clearTimeout(timerId)
 }) {
   let queueEngineRun = Promise.resolve();
+  let runGeneration = 0;
+  let activeSave = null;
   let queueEngineDelayTimerId = null;
 
   function enqueueQueueEngineTask(trigger, task) {
@@ -42,6 +44,7 @@ export function createQueueEngine({
   }
 
   async function runQueueEngine(_trigger) {
+    const generation = runGeneration;
     let queueRuntime = await getQueueRuntime();
     if (queueRuntime.status !== "running") {
       clearQueueEngineDelayTimer();
@@ -91,6 +94,7 @@ export function createQueueEngine({
         return;
       }
 
+      if (generation !== runGeneration) return;
       queueItems = [...queueItems];
       const itemForSave = {
         ...queueItems[activeIndex],
@@ -99,26 +103,26 @@ export function createQueueEngine({
       };
       queueItems[activeIndex] = itemForSave;
       await saveQueueItems(queueItems);
-      const queueSettings = await getQueueSettingsSafely();
-      const normalizedQueueSettings = normalizeQueueSettings(queueSettings);
+      if (generation !== runGeneration) return;
+      const controller = new AbortController();
+      const deadlineAt = Date.now() + 4 * 60 * 1000;
+      const timer = setTimeout(() => controller.abort(new Error("Save deadline exceeded.")), 4 * 60 * 1000);
+      activeSave = { controller, deadlineAt };
+      let saveResult;
+      try {
+        saveResult = await saveQueueItemWithProvider({
+          queueItem: itemForSave, tabId: activeTabId,
+          signal: controller.signal
+        });
+      } catch (error) { saveResult = { ok: false, error: error.message || "Snapshot save failed." }; }
+      finally { clearTimeout(timer); activeSave = null; }
 
-      const saveResult = await saveQueueItemWithProvider({
-        queueItem: itemForSave,
-        tabId: activeTabId,
-        zoteroSaveMode: normalizedQueueSettings.zoteroSaveMode
-      });
-
+      const latestRuntime = await getQueueRuntime();
       queueItems = await getQueueItems();
-      const refreshedActiveIndex = queueItems.findIndex((item) => item.id === queueRuntime.activeQueueItemId);
-      if (refreshedActiveIndex < 0) {
-        queueRuntime = {
-          ...clearQueueRuntimeActive(await getQueueRuntime()),
-          updatedAt: Date.now()
-        };
-        await saveQueueRuntime(queueRuntime);
-        await clearQueueAlarm();
-        return;
-      }
+      const refreshedActiveIndex = queueItems.findIndex((item) => item.id === itemForSave.id);
+      if (generation !== runGeneration || refreshedActiveIndex < 0
+        || latestRuntime.activeQueueItemId !== itemForSave.id || latestRuntime.activeTabId !== activeTabId
+        || !isQueueItemActiveStatus(queueItems[refreshedActiveIndex].status)) return;
 
       const nextQueueItems = [...queueItems];
       if (saveResult.ok) {
@@ -126,7 +130,8 @@ export function createQueueEngine({
           ...nextQueueItems[refreshedActiveIndex],
           status: "archived",
           updatedAt: Date.now(),
-          lastError: undefined
+          lastError: undefined,
+          warnings: saveResult.warnings || []
         };
         await saveQueueItems(nextQueueItems);
         await closeTabIfPresent(activeTabId);
@@ -143,6 +148,8 @@ export function createQueueEngine({
             : "Snapshot save failed."
         )
       };
+      if (saveResult.permissionUrl) nextQueueItems[refreshedActiveIndex].permissionUrl = saveResult.permissionUrl;
+      if (saveResult.outcome === "needs_review") nextQueueItems[refreshedActiveIndex].status = "needs_review";
       await saveQueueItems(nextQueueItems);
       await closeTabIfPresent(activeTabId);
 
@@ -223,9 +230,20 @@ export function createQueueEngine({
       return;
     }
 
+    const currentRuntime = await getQueueRuntime();
+    if (generation !== runGeneration || currentRuntime.status === "idle") {
+      await closeTabIfPresent(openedTabId);
+      const currentItems = await getQueueItems();
+      const index = currentItems.findIndex(item => item.id === itemToRun.id && item.status === "opening_tab");
+      if (index >= 0) {
+        currentItems[index] = { ...currentItems[index], status: "cancelled", updatedAt: Date.now() };
+        await saveQueueItems(currentItems);
+      }
+      return;
+    }
     clearQueueEngineDelayTimer();
     const nextRuntime = {
-      ...queueRuntime,
+      ...currentRuntime,
       activeQueueItemId: itemToRun.id,
       activeTabId: openedTabId,
       nextRunAt: null,
@@ -236,6 +254,11 @@ export function createQueueEngine({
   }
 
   async function handleQueueAlarm() {
+    if (activeSave) {
+      if (Date.now() >= activeSave.deadlineAt) activeSave.controller.abort(new Error("Save deadline exceeded."));
+      await scheduleQueueAlarm();
+      return;
+    }
     return enqueueQueueEngineTask("alarm", async () => {
       await handleQueueAlarmInternal();
     });
@@ -343,7 +366,8 @@ export function createQueueEngine({
   async function scheduleQueueAlarm() {
     try {
       await chrome.alarms.create(QUEUE_ENGINE_ALARM_NAME, {
-        delayInMinutes: QUEUE_ALARM_DELAY_MINUTES
+        delayInMinutes: QUEUE_ALARM_DELAY_MINUTES,
+        periodInMinutes: QUEUE_ALARM_DELAY_MINUTES
       });
     } catch (error) {
       console.error("[webpage-archivist] Failed to schedule queue alarm.", error);
@@ -383,6 +407,12 @@ export function createQueueEngine({
     }
   }
 
+  function cancelActiveSave() {
+    runGeneration++;
+    activeSave?.controller.abort(new Error("Queue was stopped or the item was removed."));
+    clearQueueEngineDelayTimer();
+  }
+
   function waitForIdle() {
     return queueEngineRun;
   }
@@ -409,7 +439,7 @@ export function createQueueEngine({
       updatedAt: now
     };
     await saveQueueRuntime(nextRuntime);
-    await clearQueueAlarm();
+    await scheduleQueueAlarm();
     scheduleQueueEngineDelayRun(nextRuntime.nextRunAt, `${trigger}-delayed`);
   }
 
@@ -473,6 +503,7 @@ export function createQueueEngine({
   }
 
   return {
+    cancelActiveSave,
     clearQueueAlarm,
     closeTabIfPresent,
     handleQueueAlarm,

@@ -1,285 +1,291 @@
-# Webpage Archivist Architecture
+# Webpage Archivist architecture
 
-## 1. Purpose and Scope
-This document describes the current architecture of Webpage Archivist as implemented in the repository.
+## Status
 
-Scope includes:
-- Runtime surfaces and component boundaries.
-- State and storage model.
-- Link collection, queue processing, and Zotero save flows.
-- Reliability, security, and permission choices.
-- Intentional tradeoffs and extension points.
+Archivist now uses Zotero Desktop's authenticated **local API**, directly at
+`http://127.0.0.1:23119/api/`. It captures the loaded browser document itself and
+imports a webpage plus an HTML snapshot. The official browser Connector is not
+required. The old iframe bridge and its compatibility code have been removed;
+there is no migration path for its provider state.
 
-This document is architectural reference, not an implementation plan.
+The initial protocol investigation used Zotero 10.0.6. Real integration testing
+used Zotero 10.0.7 and Chromium 156, with separate browser and Zotero profiles.
+[The investigation](LOCAL_PROVIDER_RESEARCH.md) records the upstream source
+references and the rejected Connector HTTP approach. In particular, the browser
+Connector removed the private iframe transport Archivist previously depended on.
 
-## 2. System Overview
-Webpage Archivist is a Manifest V3 Chromium extension with four primary runtime surfaces:
+## Modules and build
 
-1. Side panel UI (`sidepanel/`)
-2. Background service worker (`background/service-worker.js`)
-3. On-demand content collector script (`content/collector.js`)
-4. Zotero provider adapter (`zotero/`)
+| Surface | Files | Responsibility |
+| --- | --- | --- |
+| Service worker | `background/service-worker.js`, `message-router.js` | Browser events, panel-only queue command authorization and dispatch |
+| Queue | `background/queue-engine.js`, `queue-lifecycle.js` | One active item/tab, pacing, cancellation, restart handling and outcome application |
+| Queue state | `shared/storage-repo.js`, `shared/state.js`, `shared/protocol.js` | Normalized queue/settings/diagnostics in `chrome.storage.local` |
+| Local client | `zotero/local-client.js` | Fixed-origin requests, API identity, deadlines, authorization, library/collection enumeration |
+| Connection settings | `zotero/local-settings.js` | Server-bound authorization and explicit destination |
+| Provider | `zotero/provider-local.js`, `background/provider-orchestrator.js` | Keyed item creation/reconciliation, three-phase upload, health diagnostics |
+| Capture | `content/snapshot.js`, `background/snapshot-capture.js` | SingleFile adapter, document binding, bounded chunk transfer |
+| Save records | `background/save-job-repo.js` | IndexedDB job metadata, temporary snapshot bytes and completion receipts |
+| Panel | `sidepanel/`, particularly `zotero-controller.js` | Link selection, queue controls, Connect Zotero, explicit destination and recovery feedback |
+| Link collection | `shared/link-collection.js`, `content/collector.js` | Direct panel-to-page script execution, document binding, bounded waits and local persistence |
+| Build | `scripts/build.mjs` | Regenerate or verify committed SingleFile/SparkMD5 assets, source and notices |
 
-Shared contracts and normalization logic are centralized in:
-- `shared/protocol.js`
-- `shared/state.js`
+Load the **repository root** unpacked immediately after cloning. Updates are
+`git pull` followed by Reload in Chromium, keeping the same checkout path. No
+Node/npm installation or build is required for users. Application modules run
+directly from source; the provider imports the checked-in `vendor/md5.js` module.
+Both SingleFile capture scripts are checked in, along with upstream source and
+license notices. No executable dependency is downloaded at runtime. `dist/` is
+no longer used or generated.
 
-All durable extension state is persisted in `chrome.storage.local`.
+Maintainers run `npm ci && npm run build` to regenerate runtime assets after
+changing their inputs. The build stages all outputs before replacing generated
+files. Commit the assets together with changes to the snapshot adapter, build
+recipe or pinned dependencies. `npm run check:assets` builds into a temporary
+directory and compares every generated bundle, upstream source file and notice;
+it never repairs the checkout. `npm test` and CI run this check before tests.
+A clean-source rebuild test verifies reproducibility without existing assets and
+checks that missing/stale assets are rejected without modification. Browser tests
+load runtime files copied from the checkout without `node_modules` or `dist` and
+exercise worker registration/reload, retained storage, snapshot capture/checksums,
+native side-panel operations, and delayed initialization. See
+[dependency notices](../THIRD_PARTY_NOTICES.md). The combined extension is
+distributed under AGPL-3.0-or-later; original Archivist code also retains a
+separate MIT grant. Supplemental source archives and nested build inputs in
+`third-party/` cover the CSS-tree/ZIP bundles omitted from SingleFile's npm source
+package. Builds verify their recorded hashes and generate explicit `.LEGAL.txt`
+sidecars with full license texts and ordinary upstream notice headers. A panel
+Licenses link provides local access to terms, attribution, warranty information
+and source directions. See [license scope](../LICENSING.md).
 
-## 3. Component Architecture
+The panel owns local settings, selectors, collected links and selection. It reads
+one normalized snapshot directly through `shared/storage-repo.js`, then refreshes
+Zotero diagnostics independently. Edit revisions and intervening storage events
+prevent a delayed initial snapshot from replacing newer local state. Diagnostics
+share `zotero/diagnostics.js` between panel and worker; they never gate hydration.
+The worker owns durable queue operations. One shared local-initialization promise
+orders startup cleanup before recovery, commands and browser events. Startup does
+not fetch Zotero diagnostics. Its command handlers are serialized so
+new commands cannot race queue cleanup. Worker replies have a 45-second UI deadline;
+timeouts report an uncertain command outcome and never retry mutations automatically.
+The old local-state/selector/collection message routes have been removed.
 
-### 3.1 Manifest and Browser Integration
-`manifest.json` defines:
-- MV3 service worker background.
-- Native side panel UI (`side_panel.default_path`).
-- Required permissions: `storage`, `alarms`, `tabs`, `scripting`, `sidePanel`.
-- Optional host permissions for `http://*/*` and `https://*/*`.
+Selector-rule edits are validated and saved directly from the trusted panel to
+`chrome.storage.local`. They do not depend on a worker message acknowledgement.
+The panel bounds each save attempt to five seconds, retaining the dirty draft on
+failure and ignoring late acknowledgements. Collect waits for a successful save
+before using edited rules. The selector integration test covers native side-panel
+saves with the worker stopped, hung storage, retry, and late responses.
 
-The browser action opens the side panel via `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`.
+Link collection also runs directly from the trusted panel. It uses the tab
+captured at the Collect click, checks host access, injects the collector on demand
+into the top frame's isolated world, and calls it with `scripting.executeScript`.
+The call targets the injected document ID and returns its links as a script
+result. It requires neither a runtime/content-message listener nor a Zotero
+diagnostic refresh. Collection belongs to the open panel: closing it before the
+result is persisted can discard that result. Durable queue saves remain worker-owned.
 
-### 3.2 Side Panel Application
-The side panel is a modular UI app composed of:
-- Entry/orchestration: `sidepanel/panel.js`
-- Runtime message actions: `sidepanel/actions.js`
-- Local panel store: `sidepanel/store.js`
-- Rendering utilities: `sidepanel/render.js`
-- Focused controllers:
-  - `sidepanel/selector-controller.js`
-  - `sidepanel/link-curation-controller.js`
-  - `sidepanel/queue-controller.js`
+Browser/storage operations have five-second deadlines. The page read allows the
+configured maximum scrolling duration plus five seconds (27.5 seconds with the
+default settings; static pages normally finish after three 750 ms idle rounds).
+Failure returns a specific error and releases the Collect button. A timed-out
+run is cancelled on a best-effort basis; its late result cannot initiate a storage
+write. Collection errors or detected navigation preserve the previous links.
+As with rule saves, an already-issued storage write cannot be cancelled by timing
+out its acknowledgement. Native-panel integration tests exercise collection with
+the worker stopped, a non-responsive runtime channel, and a stalled page result.
 
-Responsibilities:
-- Manage selector rules.
-- Collect and curate links.
-- Author and control queue lifecycle.
-- Show integration diagnostics.
-- Keep UI synchronized with background state via `chrome.storage.onChanged`.
+## Connection and destination
 
-### 3.3 Background Service Worker
-`background/service-worker.js` is the system orchestrator.
+The panel's **Connect Zotero** click requests optional `http://127.0.0.1/*` access.
+The existing optional HTTP(S) host declarations cover it; no broad required host
+permission, always-on content script, offscreen permission or cloud key is added.
+The minimum Chromium version is now 120.
 
-Responsibilities:
-- Initialize normalized storage state on install/startup.
-- Route and validate runtime messages.
-- Trigger content collection in the active tab.
-- Manage queue lifecycle commands.
-- Run queue engine and recovery behavior.
-- Refresh/save provider diagnostics.
+1. `GET /api/` returns API/version/server identity headers. API version 3 is required.
+2. The panel calls `POST /api/local/authorize` with `appName: "Webpage Archivist"`
+   and the server ID. Zotero presents its consent dialog. This request runs in the
+   panel, with a 120-second deadline, so a worker's fetch-response lifetime does not
+   cut off the user interaction. Closing the panel interrupts setup; Connect can be
+   tried again.
+3. The user must choose **Always Allow**. One-time keys are rejected locally because
+   the save takes multiple write requests. Authorization is not requested automatically
+   by queue jobs, and a 401 clears the saved key and asks the user to reconnect.
+4. The local key and server ID are stored in `chrome.storage.local`, restricted to
+   `TRUSTED_CONTEXTS`. They are not returned in panel-state snapshots, capture data,
+   URLs or logs. Content scripts cannot access this storage.
+5. The panel enumerates `/users/0/groups` and library collections. The destination
+   defaults to **My Library** upon first connection and can be changed explicitly.
+   It is bound to the server ID and pinned into each durable save job. A group API
+   path uses its group ID; collection/item identifiers are eight-character keys.
 
-Supporting modules:
-- `background/message-router.js`: message contract validation and handler dispatch.
-- `background/storage-repo.js`: storage read/write + normalization/write-back.
-- `background/queue-lifecycle.js`: start/pause/resume/stop/clear/retry control semantics.
-- `background/queue-engine.js`: deterministic queue state machine.
-- `background/provider-orchestrator.js`: provider resolution and save orchestration.
+Diagnostics distinguish host access, reachable API, stored authorization and
+available destination. Read requests cannot validate whether a stored key has been
+revoked or a group permits writes; those checks happen when Zotero handles the
+write. A destination read is therefore not a promise of file editability.
 
-### 3.4 On-Demand Collector
-`content/collector.js` is injected only when link collection is requested.
+The HTTP client sends `X-Zotero-Connector-API-Version: 3` to satisfy the desktop
+server's browser-request check, alongside `Zotero-API-Version: 3`. Writes also use
+`Zotero-Server-ID` and `Zotero-API-Key`. Every response is checked for server/API
+identity. The client restricts the origin, port, paths and methods, refuses
+redirects, never follows the local `/file` route's `file://` redirects, and applies
+20-second request deadlines. An upload URL must exactly match the fixed local
+origin and the returned upload token; upload bytes do not carry the API key.
 
-Responsibilities:
-- Evaluate enabled selector rules against page DOM.
-- Extract and normalize URLs.
-- Apply include/exclude pattern filtering.
-- Dedupe links within a run.
-- Optionally auto-scroll for infinite-scroll pages until no new content appears.
-- Return lightweight candidate metadata to background.
+## Capturing a page
 
-The collector is not permanently injected.
+The queue opens one background tab and waits for loading to complete. Capture
+rechecks HTTP(S) access for the final URL, then injects packaged SingleFile hooks in
+the main world and the capture adapter in Archivist's isolated world. Subsequent
+operations are addressed to the exact top-frame `documentId`. A changed URL,
+replaced document, unsupported content type, timeout or malformed transfer fails
+before library creation.
 
-### 3.5 Zotero Provider Layer
-Provider abstractions live in `zotero/`:
-- `provider-interface.js`: diagnostics and provider result normalization helpers.
-- `provider-connector-bridge.js`: current active provider implementation.
+SingleFile snapshots the **live DOM**, including authenticated/dynamic content.
+The adapter waits for bounded deferred loading, removes scripts, inlines accessible
+resources and emits HTML with a restrictive CSP. Resource requests stay in the
+page's network context: same-origin requests may use its session, cross-origin
+requests omit credentials and remain subject to CORS. There is no extension-side
+resource fetch proxy and no path from page scripts to the localhost API client.
 
-Current provider mode:
-- `connector_bridge`
+Initial limits and coverage:
 
-The orchestrator health-checks the provider, persists diagnostics, and delegates save operations.
+- 120-second capture deadline; 20 MiB maximum UTF-8 snapshot.
+- 15-second resource deadlines, 5 MiB per resource and 40 MiB aggregate fetched bytes.
+- Embedded frames and audio/video are omitted. Missing resource requests produce
+  visible queue warnings; this implementation does not promise complete rendering
+  for arbitrary cross-origin frames, CDNs, protected media or all lazy-loading sites.
+- PDF/EPUB imports, translator metadata, MHTML and silent URL-only fallback are excluded.
+- Redirects to an ungranted host retain the final URL as a permission requirement.
+  Retry followed by Start/Resume requests that origin through a panel gesture.
 
-## 4. Runtime Data Contracts
+The worker polls the isolated capture object, then pulls ordered chunks of at most
+16,000 UTF-16 code units using `executeScript`. No snapshot is returned as one large
+runtime message. Chunks are joined before UTF-8 encoding, preserving surrogate pairs
+at boundaries; document, total length and final byte limits are checked. The
+snapshot is persisted and hashed before any Zotero write. Polls are bounded and
+provide worker activity during capture; durable records handle later restarts.
 
-### 4.1 Message Protocol
-`shared/protocol.js` defines message types used across panel/background/collector.
+## Save protocol and durable recovery
 
-Key message groups:
-- Panel state and collection: `GET_PANEL_STATE`, `COLLECT_LINKS`, `RUN_COLLECTOR`.
-- Link and selector updates: `SET_COLLECTED_LINKS`, `SET_SELECTOR_RULES`.
-- Queue authoring/lifecycle: `AUTHOR_QUEUE_FROM_SELECTION`, `SET_QUEUE_SETTINGS`, `START_QUEUE`, `PAUSE_QUEUE`, `RESUME_QUEUE`, `STOP_QUEUE`, `CLEAR_QUEUE`, `RETRY_FAILED_QUEUE`.
+IndexedDB contains `jobs` and `payloads` object stores. A job records its queue ID,
+server/library/collection, parent and attachment keys, captured final URL/title,
+creation time, capture warnings, byte count, MD5, phase and acknowledged item writes.
+Payload plus initial job are committed in one transaction before creating library
+items. MD5 is required by Zotero's upload protocol, not used as an authentication
+mechanism.
 
-`background/message-router.js` enforces payload contracts before dispatch.
+```mermaid
+sequenceDiagram
+  participant Q as Queue / local provider
+  participant B as Browser document
+  participant D as Extension IndexedDB
+  participant Z as Zotero local API
+  Q->>Z: Check server and destination
+  Q->>B: Capture live HTML and pull bounded chunks
+  Q->>D: Persist snapshot, destination, random item keys and hash
+  Q->>Z: GET parent by key; POST keyed webpage if absent
+  Q->>D: Record parent acknowledgement
+  Q->>Z: GET attachment by key; POST imported_url attachment if absent
+  Q->>D: Record attachment acknowledgement
+  Q->>Z: Authorize file upload with MD5 and If-None-Match: *
+  Q->>Z: Upload raw UTF-8 bytes to returned loopback URL
+  Q->>Z: Register upload token with If-None-Match: *
+  Z-->>Q: 204 registered
+  Q->>Z: Read attachment metadata and verify MD5
+  Q->>D: Persist completion and delete payload atomically
+  Q->>Q: Mark queue item archived
+```
 
-### 4.2 State Shapes
-`shared/state.js` defines normalization and queue semantics.
+Creation uses `version: 0` with keys generated and persisted by Archivist. Reads by
+key precede creates. Batch HTTP 200 alone is insufficient: the provider checks
+per-object failure entries and reads the keyed object back. Existing items must
+match their expected identity/URL/type/parent/collection before being reused; user
+changes or acknowledged items later deleted cause `needs_review`. The provider
+never overwrites conflicting objects or silently chooses replacement keys.
 
-Queue item statuses:
-- `pending`
-- `opening_tab`
-- `saving_snapshot`
-- `archived`
-- `failed`
-- `cancelled`
+Uploads have authorization, byte transfer and registration phases. The file
+precondition prevents overwriting an existing file. If the attachment already
+reports the expected MD5 after a lost response, the provider can finish without
+reuploading. A different MD5 requires review. Expired upload tokens are harmless to
+item identity: a retry obtains a new token for the same attachment. A completed
+local receipt is authoritative if the worker stopped before updating the queue.
 
-Queue runtime statuses:
-- `idle`
-- `running`
-- `paused`
+| Situation | Outcome |
+| --- | --- |
+| Capture failure or API unavailable | Failed; retry after fixing the cause |
+| Lost create/upload/register response | Failed; retry reads the same keys and reconciles before further writes |
+| Worker restarts with an active save | Queue resumes; persisted job avoids new keys/capture |
+| Destination changed in panel | Existing jobs retain their original target |
+| Wrong server, changed/deleted item, conflicting file | Needs review; excluded from ordinary retry |
+| Retained payload missing/expired before completion | Needs review; no replacement parent is created |
+| Durable completion receipt exists | Mark archived without another write |
 
-Default collector settings:
-- `maxLinksPerRun = 500` (clamped to `1..5000`)
-- `autoScrollEnabled = true`
-- `autoScrollMaxRounds = 30` (clamped to `1..200`)
-- `autoScrollIdleRounds = 3` (clamped to `1..20`)
-- `autoScrollSettleDelayMs = 750` (clamped to `100..10000`)
+This is recovery through keyed objects and conditional writes, not a multi-request
+transaction. A parent or empty attachment can remain after a failure. A crash inside
+Zotero's own filesystem/database commit can still need manual review. The extension
+does not delete or roll back library objects to hide a partial result. Metadata MD5
+is the API receipt used by the provider; the integration test additionally reads and
+renders the actual files from the disposable library.
 
-Default queue pacing settings:
-- `interItemDelayMs = 5000`
-- `interItemDelayJitterMs = 2000` (effective delay range is about `3..7s`)
+Payload retention is bounded to 128 MiB total and 24 hours. Successful jobs delete
+the payload immediately; receipts remain while the queue entry exists. Cleanup on
+initialization and queue removal expires payloads and deletes orphan records.
+Capture and payload reads also enforce retention before accepting or reusing bytes.
+The quota is a cap, not automatic eviction of another pending job. Clearing the
+extension's data destroys its reconciliation keys. Do not do that to retry a save.
 
-### 4.3 Storage Model
-Durable data in `chrome.storage.local`:
-- `selectorRules`
-- `collectedLinks`
-- `collectorSettings`
-- `queueSettings`
-- `queueItems`
-- `queueRuntime`
-- `providerDiagnostics`
+## Queue lifecycle and trust boundaries
 
-`background/storage-repo.js` normalizes data on read and writes back normalized values (self-healing). It also migrates a legacy selector default shape to current defaults.
+Queue item states are `pending`, `opening_tab`, `saving_snapshot`, `archived`,
+`failed`, `cancelled`, and `needs_review`; runtime states are idle/running/paused.
+The provider's warnings and review outcomes survive orchestration and normalization.
 
-## 5. Core Flows
+Pause prevents new work and lets an executing save settle. Stop/remove/clear
+invalidate the engine generation and abort active requests. The provider checks
+cancellation before writes; the engine checks the current generation, active item,
+tab and status before applying any result. A late completion cannot advance another
+run or turn a stopped item into archived. Abort does not undo remote side effects;
+Retry / Reconcile uses the durable job. Review outcomes are not included in bulk retry.
 
-### 5.1 Link Collection Flow
-1. Side panel requests collection.
-2. Panel ensures host permission for active tab origin.
-3. Background validates active tab and permission state.
-4. Background injects `content/collector.js` with `chrome.scripting.executeScript`.
-5. Background sends `RUN_COLLECTOR` message with selector rules and max link cap.
-6. Collector auto-scrolls with bounded retries (when enabled), then returns normalized link candidates.
-7. Background persists candidates and returns updated diagnostics.
-8. Panel renders and enables curation actions.
+A four-minute save deadline bounds the provider wait independently of the page-load
+timeout. The watchdog can signal cancellation without waiting behind the provider
+promise. Pacing uses both a short timer and an alarm, and the worker recovers queue
+state on activation as well as browser startup.
 
-### 5.2 Link Curation and Queue Authoring
-1. User selects/deselects collected links in panel.
-2. Link curation controller persists curated selection via `SET_COLLECTED_LINKS`.
-3. Queue controller sends selected links via `AUTHOR_QUEUE_FROM_SELECTION`.
-4. Background dedupes against existing queue URLs and appends new `pending` queue items.
+Only messages from the exact Archivist panel URL and extension ID reach privileged
+command routing. A page content script cannot invoke Start, authorize, choose an API
+path, or fetch through the extension. Capture is pulled by the worker from a fixed
+document rather than accepting page-supplied progress messages.
 
-### 5.3 Queue Processing Flow
-1. User starts/resumes queue from side panel.
-2. Queue controller preflights host permissions for relevant queued URLs.
-3. Background queue lifecycle sets runtime to `running` and triggers queue engine.
-4. Queue engine promotes next `pending` item to `opening_tab`, opens a background tab, and stores active runtime pointers.
-5. On tab completion (`tabs.onUpdated`) queue engine transitions item to `saving_snapshot`.
-6. Engine calls provider orchestrator to save with snapshot behavior.
-7. Success path: mark `archived`, close tab, clear active runtime pointers, continue.
-8. Failure path: mark `failed` with `lastError`, close tab, clear active pointers, continue.
-9. Between completed items, engine applies configurable pacing delay + jitter before opening the next pending item.
-10. If no pending items remain, runtime returns to `idle`.
+## Verification and remaining limits
 
-### 5.4 Diagnostics Flow
-1. `GET_PANEL_STATE` refreshes provider diagnostics.
-2. Provider orchestrator runs health checks and persists normalized diagnostics.
-3. Side panel renders mode, bridge health, connector availability, Zotero online status, and last error.
+`npm test` covers API headers, server binding, rejected endpoints/redirect policy,
+empty responses, per-object errors, lost write responses, cancellation, conflicting
+items, expired payloads, chunk/document validation, and queue/panel/storage behavior.
+The prior iframe tests were replaced with local-provider tests.
 
-## 6. Queue Engine Design
-`background/queue-engine.js` implements a serialized, restart-safe state machine.
+`tests/integration/local-zotero.mjs` uses a separate Chromium profile and disposable
+Zotero profile, with no browser Connector. It archives a public and cookie-protected
+fixture, checks the resulting HTML files for live DOM/Unicode content and embedded
+assets, and renders both offline to verify text, CSS and images. A test-only copy
+points at port 23129; production remains fixed at 23119. The test uses a preseeded
+key belonging only to that disposable profile; interactive consent remains the
+user's Connect step in normal installation.
 
-Key design choices:
-- Single active queue item at a time (`activeQueueItemId`, `activeTabId`).
-- Serialized runs through `runQueueEngineSoon` promise chaining to avoid concurrent mutations.
-- Event-driven progression via:
-  - `chrome.tabs.onUpdated`
-  - `chrome.tabs.onRemoved`
-  - `chrome.alarms` watchdog (`queue-engine-watchdog`)
-- Alarm handling re-checks loading queue tabs and only fails them after a bounded max-load wait;
-  closed/missing active tabs fail immediately.
-- Recovery on worker startup (`recoverQueueEngineState`) resumes engine if runtime status is `running`.
+Group write restrictions, complex frames/media and hard process termination during
+Zotero file registration need broader integration coverage. An offscreen upload
+context is not currently used; large or slow local requests fail at the explicit
+deadline and can be reconciled on retry. No compatibility fallback to the Connector
+or the cloud API is provided.
 
-Lifecycle operations in `background/queue-lifecycle.js` enforce control semantics:
-- `start`: requires pending work, rejects paused runtime.
-- `pause`: only when running, clears alarm.
-- `resume`: only when paused and work exists.
-- `stop`: cancels active item if needed, resets runtime, closes active tab.
-- `retry failed`: moves `failed` and `cancelled` back to `pending`.
-- `clear`: allowed only when not running.
+## Cancellation and cleanup
 
-## 7. Zotero Connector Bridge Design
-The implemented provider (`zotero/provider-connector-bridge.js`) uses a bridge to Zotero Connector internals.
-
-Health strategy:
-- Resolve a probe tab with `http(s)` URL and granted host permission.
-- Run `Connector.checkIsOnline` through the bridge.
-- Emit diagnostics for:
-  - Connector extension unavailable
-  - Connector available but Zotero offline
-  - Healthy connector + Zotero online
-
-Save strategy for each queue item:
-1. Resolve queue tab metadata.
-2. Run `Connector_Browser.injectTranslationScripts`.
-3. Run `Connector.checkIsOnline`.
-4. Run `Messaging.sendMessage("saveAsWebpage", [title, { snapshot: true }], tabId, 0)`.
-
-Bridge invocation model:
-- `chrome.scripting.executeScript` injects a helper into the queue tab.
-- Helper loads Zotero's internal iframe bridge endpoint.
-- Helper opens a `MessageChannel`, sends command payloads, and enforces timeouts.
-- Provider fails closed with explicit error messages on bridge failures.
-
-## 8. Permission and Security Model
-Least-privilege principles are implemented as:
-- Optional host permissions requested at runtime per origin.
-- Collection blocked when site permission is missing.
-- Queue start/resume preflights permissions for queued URLs.
-- No always-on content script; collector is injected on demand.
-
-Data and message safety:
-- Runtime message shape validation in `message-router`.
-- Strict normalization of all persisted state (`storage-repo`, `shared/state`).
-- Persisted data is limited to selector rules, link metadata, queue/runtime state, and diagnostics.
-- No page DOM/content snapshots are stored by Archivist.
-
-## 9. Observability and UI Feedback
-User-facing state visibility includes:
-- Global status line messages for all major actions.
-- Queue item status badges, attempts, and last error.
-- Queue runtime status text (`idle`, `running`, `paused`).
-- Integration diagnostics section with connector/zotero availability breakdown and last error.
-
-Background state changes to queue and diagnostics are reflected live in the panel through `chrome.storage.onChanged`.
-
-## 10. Testing Strategy
-The project uses module-level tests with Node's built-in test runner (`node:test`).
-
-Covered areas include:
-- Message routing validation.
-- Shared state normalization/helpers.
-- Storage normalization/write-back behavior.
-- Queue lifecycle handlers.
-- Queue engine state transitions and watchdog behavior.
-- Provider orchestration and connector bridge behavior via mocks.
-- Side panel controllers and store behavior.
-
-This test strategy emphasizes deterministic module contracts and mocked browser/provider integrations.
-
-## 11. Intentional Tradeoffs and Current Constraints
-Current architecture intentionally favors reliability and clarity over breadth.
-
-Intentional constraints:
-- Single provider mode (`connector_bridge`).
-- Single-item queue processing (no concurrent save workers).
-- `chrome.storage.local` only (no `sync`/`session` usage).
-- Side panel is the only UI surface.
-
-Tradeoffs:
-- Connector integration depends on non-public connector internals, so diagnostics and explicit failure handling are prioritized.
-- Permission preflights can add interaction steps, but preserve least privilege.
-- Queue processing is conservative (serialized) to minimize cross-tab/provider complexity.
-
-## 12. Extension Points
-The current design leaves clear seams for evolution:
-- Add provider implementations behind `provider-orchestrator`.
-- Extend message protocol in `shared/protocol.js` and router contract checks.
-- Introduce additional queue policies (for example backoff/retry strategy) in `queue-engine`/`queue-lifecycle`.
-- Expand panel modules without coupling rendering, state, and action logic.
+Stop requests cancellation immediately and updates the queue. The engine retains
+and awaits the actual provider operation, including outstanding IndexedDB writes;
+it does not race that promise against an abort promise and pretend the save ended.
+The abort signal reaches capture, API requests and the health check. `waitForIdle()`
+therefore waits for settlement before job cleanup, and the engine does not start
+another save while a cancelled provider is still writing. A delayed write cannot
+recreate a job after Clear has deleted it. Durable keys and receipts still reconcile
+remote writes that Zotero may have accepted before cancellation.

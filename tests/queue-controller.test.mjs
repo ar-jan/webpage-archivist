@@ -406,3 +406,11 @@ function createHarness({
     }
   };
 }
+
+test("retrying a redirected item requests both the queued origin and the discovered host", async () => {
+  const harness = createHarness({ initialQueueItems: [{
+    id: "redirected", url: "https://example.com/start", permissionUrl: "https://www.example.com/final", status: "pending", attempts: 1
+  }] });
+  await harness.controller.startQueueProcessing();
+  assert.deepEqual(harness.permissionRequests, [["https://example.com/start", "https://www.example.com/final"]]);
+});

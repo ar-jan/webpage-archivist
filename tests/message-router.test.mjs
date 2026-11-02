@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { routeMessage } from "../background/message-router.js";
+import { routeMessage, isPanelSender } from "../background/message-router.js";
 import { MESSAGE_TYPES } from "../shared/protocol.js";
 
 test("message router rejects missing message type", async () => {
@@ -37,11 +37,11 @@ test("message router delegates to matching handler", async () => {
 test("message router rejects payload on payloadless messages", async () => {
   const response = await routeMessage(
     {
-      type: MESSAGE_TYPES.GET_PANEL_STATE,
+      type: MESSAGE_TYPES.STOP_QUEUE,
       payload: {}
     },
     {
-      [MESSAGE_TYPES.GET_PANEL_STATE]: async () => ({ ok: true })
+      [MESSAGE_TYPES.STOP_QUEUE]: async () => ({ ok: true })
     }
   );
 
@@ -184,11 +184,11 @@ test("message router rejects invalid optional queue runtime context payload", as
 test("message router validates array payload contracts", async () => {
   const invalidResponse = await routeMessage(
     {
-      type: MESSAGE_TYPES.SET_COLLECTED_LINKS,
+      type: MESSAGE_TYPES.AUTHOR_QUEUE_FROM_SELECTION,
       payload: {}
     },
     {
-      [MESSAGE_TYPES.SET_COLLECTED_LINKS]: async () => ({ ok: true })
+      [MESSAGE_TYPES.AUTHOR_QUEUE_FROM_SELECTION]: async () => ({ ok: true })
     }
   );
 
@@ -198,11 +198,11 @@ test("message router validates array payload contracts", async () => {
 
   const validResponse = await routeMessage(
     {
-      type: MESSAGE_TYPES.SET_COLLECTED_LINKS,
+      type: MESSAGE_TYPES.AUTHOR_QUEUE_FROM_SELECTION,
       payload: { links: [] }
     },
     {
-      [MESSAGE_TYPES.SET_COLLECTED_LINKS]: async () => ({ ok: true })
+      [MESSAGE_TYPES.AUTHOR_QUEUE_FROM_SELECTION]: async () => ({ ok: true })
     }
   );
 
@@ -212,27 +212,37 @@ test("message router validates array payload contracts", async () => {
 test("message router validates object payload contracts", async () => {
   const invalidResponse = await routeMessage(
     {
-      type: MESSAGE_TYPES.SET_QUEUE_SETTINGS,
+      type: MESSAGE_TYPES.REMOVE_QUEUE_ITEM,
       payload: {}
     },
     {
-      [MESSAGE_TYPES.SET_QUEUE_SETTINGS]: async () => ({ ok: true })
+      [MESSAGE_TYPES.REMOVE_QUEUE_ITEM]: async () => ({ ok: true })
     }
   );
 
   assert.equal(invalidResponse.ok, false);
   assert.equal(invalidResponse.error.code, "BAD_REQUEST");
-  assert.match(invalidResponse.error.message, /payload\.queueSettings/i);
+  assert.match(invalidResponse.error.message, /payload\.queueItem/i);
 
   const validResponse = await routeMessage(
     {
-      type: MESSAGE_TYPES.SET_QUEUE_SETTINGS,
-      payload: { queueSettings: { interItemDelayMs: 5000, interItemDelayJitterMs: 2000 } }
+      type: MESSAGE_TYPES.REMOVE_QUEUE_ITEM,
+      payload: { queueItem: { interItemDelayMs: 5000, interItemDelayJitterMs: 2000 } }
     },
     {
-      [MESSAGE_TYPES.SET_QUEUE_SETTINGS]: async () => ({ ok: true })
+      [MESSAGE_TYPES.REMOVE_QUEUE_ITEM]: async () => ({ ok: true })
     }
   );
 
   assert.equal(validResponse.ok, true);
+});
+
+test("privileged commands accept only the extension panel, never page content scripts", () => {
+  const runtime = { id: "archivist", getURL: path => `chrome-extension://archivist/${path}` };
+  const sender = { id: "archivist", url: runtime.getURL("sidepanel/panel.html") };
+  assert.equal(isPanelSender(sender, runtime), true);
+  assert.equal(isPanelSender({ ...sender, tab: { id: 1 } }, runtime), true);
+  assert.equal(isPanelSender({ ...sender, tab: { id: 1 }, url: "https://example.org/" }, runtime), false);
+  assert.equal(isPanelSender({ ...sender, id: "another-extension" }, runtime), false);
+  assert.equal(isPanelSender({ ...sender, url: "https://example.org" }, runtime), false);
 });

@@ -796,6 +796,12 @@ body {
   color: var(--text-secondary);
 }
 
+.licenses-link {
+  color: var(--text-secondary);
+  margin-right: var(--space-sm);
+  text-underline-offset: 2px;
+}
+
 .spacer {
   flex: 1;
 }
@@ -840,3 +846,7 @@ body {
   margin-top: var(--space-xs);
   font-weight: 500;
 }
+
+.zotero-connection-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+#zotero-destination-select { min-width: 0; max-width: 100%; flex: 1 1 180px; }
+.queue-status-needs_review { background: #fff1cd; color: #7c4b00; }
